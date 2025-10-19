@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.log
+*.sqlite
+*.json
+.env
+venv/
+.env.*
+.idea/
+.vscode/
+dist/
+build/
+logs/
+tests/
+output/
+state/*.db
+playwright-report/
+test-results/
+requirements-dev.txt

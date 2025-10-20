@@ -1,3 +1,15 @@
+from app.logging import log_call, get_logger
+from app.db.queries import (
+    SQL_PRIMARY_APPTS_TODAY, SQL_MAIN_QUERY, SQL_GET_LAST_OBSLED, SQL_GET_PARAMSINFO,
+    SQL_GET_TREATMENT_PLAN, SQL_GET_COMPLEX_PLANS, SQL_GET_PLAN_DETAILS,
+    SQL_GET_APPROVED_PLANS, SQL_GET_APPROVED_PLANS_PAID, SQL_GET_TREATCODES,
+    SQL_GET_STAGE, SQL_GET_FUTURE_APPOINTMENTS, SQL_GET_SCHEDULE_INFO
+)
+from datetime import date as _date
+
+
+log = get_logger(__name__)
+
 def _fetch_one(conn, sql, params=()):
     cur = conn.cursor()
     cur.execute(sql, params)
@@ -38,12 +50,6 @@ def fetch_paramsinfo(conn, obslnum: int):
 @log_call()
 def fetch_composite_plan(conn, pcode: str):
     return _fetch_all(conn, SQL_GET_TREATMENT_PLAN, (pcode,))
-
-
-@log_call()
-def fetch_future_appointments(conn, pcode: str):
-    return _fetch_all(conn, SQL_GET_APPOINTMENTS, (pcode,))
-
 
 @log_call()
 def fetch_complex_plans(conn, pcode: str):

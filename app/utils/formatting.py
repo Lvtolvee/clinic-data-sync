@@ -17,7 +17,9 @@ def format_patient_data(data: dict) -> dict:
 
     # Новый блок
     result["ФИО консультанта"] = info.get("CONSULT_DOCTOR") or "—"
-    result["Дата первичного приёма"] = info.get("FIRSTWORKDATE").strftime("%d.%m.%Y") or "—"
+    # Дата первичного приёма
+    fw = info.get("FIRSTWORKDATE")
+    result["Дата первичного приёма"] = fw.strftime("%d.%m.%Y") if fw else "—"
     result["Доктор первичного приёма"] = info.get("FIRST_DOCTOR") or "—"
     result["Статус пациента"] = info.get("AGESTATUS_NAME") or "—"
     result["Тип пациента"] = info.get("TYPESTATUS_NAME") or "—"
@@ -78,8 +80,8 @@ def format_patient_data(data: dict) -> dict:
             })
         pretty_approved.append({
             "План": header,
-            "Дата": plan.get("TREATDATE").strftime("%d.%m.%Y"),
-            "Доктор": plan.get("DOCTOR_NAME"),
+            "Дата": plan.get("TREATDATE").strftime("%d.%m.%Y") if plan.get("TREATDATE") else "—",
+            "Доктор": plan.get("DOCTOR_NAME") or "—",
             "Состав": details,
             "Итого": total
         })

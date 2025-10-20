@@ -19,7 +19,7 @@ report_file_path = os.path.abspath("output/csv/management_report.xlsx")
 def load_csv_to_bitrix(settings):
 
     login = settings.BITRIX_LOGIN
-    password = settings.BITRIX_PASSWORD.get_secret_value() if settings.DB_PASSWORD else None
+    password = settings.BITRIX_PASSWORD.get_secret_value() if settings.BITRIX_PASSWORD else None
     browser = settings.BROWSER
     main_url = settings.BITRIX_MAIN_URL
     contact_url = settings.BITRIX_IMPORT_CONTACT_URL
@@ -88,11 +88,14 @@ def load_csv_to_bitrix(settings):
     wait = WebDriverWait(driver, 10)
     time.sleep(10)
     driver.find_element(By.CSS_SELECTOR, "input[type='file']").send_keys(report_file_path)
+    log.info(f"Отчёт отправлен")
+    time.sleep(5)
     try:
+        driver.find_element(By.CSS_SELECTOR, "[class='bx-disk-btn bx-disk-btn-small bx-disk-btn-gray mb0']").click()
         log.info("Кнопка 'Заменить' найдена и нажата.")
     except NoSuchElementException:
         log.info("Кнопка 'Заменить' не найдена — пропускаем клик.")
-    time.sleep(3)
+    time.sleep(5)
     driver.find_element(By.ID, 'FolderListButtonClose').click()
     log.info(f"Загрузка управленческого отчёта прошла успешно")
 

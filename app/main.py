@@ -1,15 +1,15 @@
+# app/main.py
+from __future__ import annotations
 
-import os
 import json
 import argparse
+import hashlib
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, Set, Optional, Dict, Any
-import hashlib as _hashlib
-import json as _json
+from typing import List
 
 from app.config import load_non_secret_env, Settings
-from app.logging import setup_logging, get_logger
+from app.logging import setup_logging, get_logger, patient_log, stage_log
 from app.db.client import get_connection
 from app.db.extract import (
     fetch_primary_patients_today,
@@ -20,252 +20,329 @@ from app.db.extract import (
 from app.reports.patient_report import build_patient_report
 from app.export.csv_exporter import export_patients_to_csv, export_personal_data_to_csv
 
-# -----------------------
-# Settings & logging
-# -----------------------
+# Инициализация конфигурации и логов
 load_non_secret_env()
 settings = Settings()
 setup_logging(
-    level=settings.LOG_LEVEL,
-    log_file=settings.LOG_FILE,
-    audit_log_file=settings.AUDIT_LOG_FILE,
+    level=getattr(settings, "LOG_LEVEL", "INFO"),
+    log_file=getattr(settings, "LOG_FILE", "logs/app.log"),
+    audit_log_file=getattr(settings, "AUDIT_LOG_FILE", "logs/audit.log"),
 )
 log = get_logger(__name__)
 
+# Хранилище состояния и директории
 DATA_FILE = Path("known_patients.json")
-CSV_DIR = Path("output") / "csv"
-CSV_DIR.mkdir(parents=True, exist_ok=True)
 PDF_DIR = Path("output") / "reports"
 PDF_DIR.mkdir(parents=True, exist_ok=True)
 
-# Anti-duplicate set (for THIS run only; not persisted)
-processed_in_this_run: Set[str] = set()
+
+# ===================== УТИЛИТЫ =====================
+
+def _serialize_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return str(value)
+    if isinstance(value, (int, float, str, bool)):
+        return value
+    return str(value)
 
 
-# -----------------------
-# Utils
-# -----------------------
-_SUPPORTED_DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%Y.%m.%d", "%d-%m-%Y")
+def calculate_patient_hash(patient_data: dict) -> str:
+    """Хешируем только значимые поля, чтобы детектить изменения."""
+    info = patient_data.get("info", {})
+
+    key_fields = {
+        "LASTNAME": _serialize_value(info.get("LASTNAME")),
+        "FIRSTNAME": _serialize_value(info.get("FIRSTNAME")),
+        "MIDNAME": _serialize_value(info.get("MIDNAME")),
+        "BDATE": _serialize_value(info.get("BDATE")),
+        "FULL_ADDR": _serialize_value(info.get("FULL_ADDR")),
+        "PHONE1": _serialize_value(info.get("PHONE1")),
+        "PHONE2": _serialize_value(info.get("PHONE2")),
+        "PHONE3": _serialize_value(info.get("PHONE3")),
+        "CLMAIL": _serialize_value(info.get("CLMAIL")),
+        "AGESTATUS_NAME": _serialize_value(info.get("AGESTATUS_NAME")),
+        "TYPESTATUS_NAME": _serialize_value(info.get("TYPESTATUS_NAME")),
+        "CONSULT_DOCTOR": _serialize_value(info.get("CONSULT_DOCTOR")),
+        "FIRST_DOCTOR": _serialize_value(info.get("FIRST_DOCTOR")),
+        "FIRSTWORKDATE": _serialize_value(info.get("FIRSTWORKDATE")),
+        "current_stage": _serialize_value(patient_data.get("current_stage")),
+        "composite_plan_count": len(patient_data.get("composite_plan", [])),
+        "complex_plans_count": len(patient_data.get("complex_plans", [])),
+        "approved_plans_count": len(patient_data.get("approved_plans", [])),
+        "total_sum": _serialize_value(info.get("total_sum")),
+        "paid_sum": _serialize_value(info.get("paid_sum")),
+    }
+
+    data_str = json.dumps(key_fields, sort_keys=True, ensure_ascii=False)
+    return hashlib.md5(data_str.encode("utf-8")).hexdigest()
 
 
-def parse_date_str(s: str) -> date:
-    s = s.strip()
-    for fmt in _SUPPORTED_DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-    raise ValueError(
-        f"Нераспознанный формат даты: '{s}'. Поддерживаются: {', '.join(_SUPPORTED_DATE_FORMATS)}"
-    )
-
-
-def load_known_patients() -> Dict[str, Dict[str, Any]]:
+def load_known_patients() -> dict:
     if DATA_FILE.exists():
         try:
-            with DATA_FILE.open("r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            log.warning(f"Не удалось прочитать {DATA_FILE}: {e}. Начинаем с пустого known.")
+            text = DATA_FILE.read_text(encoding="utf-8").strip()
+            return json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            stage_log("Хранилище пациентов", status="повреждено", файл=str(DATA_FILE))
             return {}
     return {}
 
 
-def save_known_patients(known: Dict[str, Dict[str, Any]]) -> None:
+def save_known_patients(data: dict) -> None:
+    DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ===================== ОСНОВНАЯ ОБРАБОТКА ПАЦИЕНТА =====================
+
+def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bool = False) -> None:
+    """
+    Обрабатывает пациента и пишет РОВНО ОДНУ строку patient_log:
+      - новый -> статус="внесен", комментарий="новый пациент"
+      - изменился -> статус="обновлен", комментарий="генерация отчёта"
+      - без изменений -> статус="пропущен", комментарий="без изменений"
+      - ошибка -> статус="ошибка", комментарий="не удалось обработать"
+    """
     try:
-        with DATA_FILE.open("w", encoding="utf-8") as f:
-            json.dump(known, f, ensure_ascii=False, indent=2)
+        current_data = collect_patient_data(conn, pcode)
+        current_hash = calculate_patient_hash(current_data)
+        appts = fetch_future_appointments(conn, pcode)
+        latest_appt = max([str(a.get("WORK_DATE_STR", "")) for a in appts], default=None)
+
+        patient_info = known.get(pcode, {})
+        last_saved_appt = patient_info.get("last_appointment_date")
+        last_saved_hash = patient_info.get("data_hash")
+
+        pdf_path = PDF_DIR / f"patient_{pcode}.pdf"
+
+        # Решаем, надо ли регенерировать PDF
+        need_regen = False
+        if not pdf_path.exists():
+            need_regen = True
+        elif last_saved_hash is None:
+            need_regen = True
+        elif current_hash != last_saved_hash:
+            need_regen = True
+        elif last_saved_appt is None or (latest_appt and last_saved_appt and latest_appt > last_saved_appt):
+            need_regen = True
+
+        if need_regen:
+            # генерим PDF и фиксируем новое состояние
+            build_patient_report(conn, pcode, str(pdf_path))
+            known[pcode] = {
+                "last_appointment_date": latest_appt,
+                "data_hash": current_hash,
+                "last_checked": str(target_date),
+                "last_updated": str(date.today()),
+                "processed_on": str(target_date),
+            }
+            # --- ЕДИНСТВЕННАЯ строка на pcode ---
+            if is_new:
+                patient_log(pcode, status="внесен", comment="новый пациент")
+            else:
+                patient_log(pcode, status="обновлен", comment="генерация отчёта", pdf=pdf_path.name)
+        else:
+            # без изменений — только отметим проверку
+            known.setdefault(pcode, {})
+            known[pcode]["last_checked"] = str(target_date)
+            known[pcode]["processed_on"] = str(target_date)
+            # --- ЕДИНСТВЕННАЯ строка на pcode ---
+            if is_new:
+                # теоретически не должно случиться (новым обычно генерим PDF), но оставим на случай отсутствия данных
+                patient_log(pcode, status="внесен", comment="новый пациент")
+            else:
+                patient_log(pcode, status="пропущен", comment="без изменений")
+
     except Exception as e:
-        log.exception(f"Ошибка записи {DATA_FILE}: {e}")
+        # Ошибка — тоже одна строка
+        known.setdefault(pcode, {})
+        known[pcode]["processed_on"] = str(target_date)
+        patient_log(pcode, status="ошибка", comment="не удалось обработать", ошибка=str(e))
 
 
-def make_sql_cache_key(sql: str, params, target_date: date, *, extra: dict | None = None) -> str:
-    key = {
-        "sql": sql,
-        "params": params,
-        "date": target_date.isoformat(),
-        "extra": extra or {},
-    }
-    data = _json.dumps(key, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
-    return _hashlib.md5(data).hexdigest()
+# ===================== ОБХОД ДИАПАЗОНА ДАТ =====================
 
-
-def calculate_patient_hash(patient_data: dict) -> str:
-    # Стабильный хеш содержимого отчёта
-    payload = _json.dumps(patient_data, ensure_ascii=False, sort_keys=True, default=str)
-    return _hashlib.md5(payload.encode("utf-8")).hexdigest()
-
-
-# -----------------------
-# Core
-# -----------------------
-def process_patient(conn, pcode: str, known: Dict[str, Dict[str, Any]], target_date: date) -> None:
-    info = fetch_main_info(conn, pcode)
-    if not info:
-        log.warning(f"Пациент {pcode} — не найден в базе, пропускаю")
-        return
-    fio = f"{info.get('LASTNAME', '')} {info.get('FIRSTNAME', '')} {info.get('MIDNAME', '')}".strip()
-    log.info(f"Пациент {pcode} {fio} — начали обработку")
-
-    # enrich known entry if new
-    entry = known.setdefault(
-        pcode,
-        {
-            "last_checked": target_date.isoformat(),
-            "last_appointment_date": None,
-            "data_hash": None,
-        },
-    )
-
-    # future appointments (на дату итерации)
-    future_appts = fetch_future_appointments(conn, pcode)
-    log.info(f"Пациент {pcode} — записей на будущее: {len(future_appts)}")
-
-    # собираем данные пациента (без лишних аргументов)
-    data = collect_patient_data(conn, pcode)
-
-    # calculate content hash
-    new_hash = calculate_patient_hash(data)
-    old_hash = entry.get("data_hash")
-
-    if new_hash != old_hash:
-        try:
-            build_patient_report(pcode, data, PDF_DIR)
-            log.info(f"Пациент {pcode} — отчёт обновлён")
-        except Exception as e:
-            log.exception(f"Пациент {pcode} — ошибка при сборке отчёта: {e}")
-        entry["data_hash"] = new_hash
-    else:
-        log.info(f"Пациент {pcode} — изменений нет, отчёт без изменений")
-
-    entry["last_checked"] = target_date.isoformat()
-    log.info(f"Пациент {pcode} — обработан")
-
-
-def main(date_range: List[date], filter_pcodes: Optional[List[str]] = None) -> None:
+def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None:
+    stage_log("Обработка диапазона дат", status="старт", начало=str(date_range[0]), конец=str(date_range[-1]))
     known = load_known_patients()
-    all_processed_pcodes: List[str] = []
 
-    filter_pcodes = filter_pcodes or []
+    # пациенты, обработанные за ВЕСЬ запуск (во всём диапазоне)
+    already_processed: set[str] = set()
+
+    csv_dir = Path("output") / "csv"
+    csv_dir.mkdir(parents=True, exist_ok=True)
 
     with get_connection(settings) as conn:
         for target_date in date_range:
-            log.info(f"Запуск за дату: {target_date}")
-            processed_today: List[str] = []
+            stage_log("Дата", status="обработка", значение=str(target_date))
+
+            # пациенты, обработанные В ЭТУ дату
+            processed_today: set[str] = set()
+            processed_list: list[str] = []
+
+            def _mark(p: str):
+                processed_today.add(p)
+                already_processed.add(p)
+                processed_list.append(p)
+                known.setdefault(p, {})
+                known[p]["processed_on"] = str(target_date)
+
+            # --- 1) Ручной фильтр по PCODE ---
+            if filter_pcodes:
+                for pcode in filter_pcodes:
+                    if pcode in processed_today or pcode in already_processed:
+                        continue
+
+                    info = fetch_main_info(conn, pcode)
+                    if not info:
+                        patient_log(pcode, status="пропущен", comment="не найден в БД")
+                        _mark(pcode)
+                        continue
+
+                    if pcode not in known:
+                        known[pcode] = {
+                            "last_checked": str(target_date),
+                            "last_appointment_date": None,
+                            "data_hash": None,
+                        }
+
+                    if known.get(pcode, {}).get("processed_on") == str(target_date):
+                        patient_log(pcode, status="пропущен", comment="уже обработан сегодня")
+                        _mark(pcode)
+                        continue
+
+                    process_patient(conn, pcode, known, target_date, is_new=(known[pcode].get("data_hash") is None))
+                    _mark(pcode)
+
+            # --- 2) Известные пациенты (если нет ручного фильтра) ---
+            if not filter_pcodes:
+                for pcode, pdata in list(known.items()):
+                    if pcode in processed_today or pcode in already_processed:
+                        continue
+
+                    if pdata.get("processed_on") == str(target_date):
+                        _mark(pcode)
+                        continue
+
+                    last_checked_str = pdata.get("last_checked")
+                    try:
+                        last_checked = datetime.strptime(last_checked_str, "%Y-%m-%d").date() if last_checked_str else None
+                    except ValueError:
+                        last_checked = None
+
+                    if not last_checked or last_checked < target_date:
+                        process_patient(conn, pcode, known, target_date, is_new=(pdata.get("data_hash") is None))
+                        _mark(pcode)
+
+            # --- 3) Первичка по текущей дате (если нет ручного фильтра) ---
+            if not filter_pcodes:
+                new_patients = fetch_primary_patients_today(conn, target_date)
+                for p in new_patients:
+                    pcode = str(p["PCODE"])
+                    if pcode in processed_today or pcode in already_processed:
+                        continue
+
+                    if pcode not in known:
+                        known[pcode] = {
+                            "last_checked": str(target_date),
+                            "last_appointment_date": None,
+                            "data_hash": None,
+                        }
+
+                    if known[pcode].get("processed_on") == str(target_date):
+                        _mark(pcode)
+                        continue
+
+                    # если известен, но давно не проверялся — обработаем
+                    last_checked_str = known[pcode].get("last_checked")
+                    try:
+                        last_checked = datetime.strptime(last_checked_str, "%Y-%m-%d").date() if last_checked_str else None
+                    except ValueError:
+                        last_checked = None
+
+                    process_patient(conn, pcode, known, target_date, is_new=(known[pcode].get("data_hash") is None))
+                    _mark(pcode)
+
+            stage_log("Дата", status="итог", значение=str(target_date), обработано=len(processed_list))
+            save_known_patients(known)
+
+        # --- Экспорт CSV по уникальным pcode за запуск ---
+        unique_pcodes = sorted(already_processed)
+        if unique_pcodes:
             try:
-                # 1) если указали явные PCODE
-                if filter_pcodes:
-                    for pcode in filter_pcodes:
-                        if pcode in processed_in_this_run:
-                            log.debug(f"Скип {pcode}: уже обработан в этом запуске")
-                            continue
-                        process_patient(conn, pcode, known, target_date)
-                        processed_in_this_run.add(pcode)
-                        processed_today.append(pcode)
-                # 2) иначе — берём пациентов за день
-                else:
-                    daily = fetch_primary_patients_today(conn, target_date)
-                    count_all = len(daily)
-                    log.info(f"Найдено пациентов за день: {count_all}")
-                    pcodes_for_day = [str(p["PCODE"]) for p in daily]
-                    # убираем тех, кого уже трогали в этом запуске
-                    pcodes_for_day = [p for p in pcodes_for_day if p not in processed_in_this_run]
-                    if not pcodes_for_day:
-                        log.info(f"За {target_date} новых пациентов нет")
-                    for pcode in pcodes_for_day:
-                        process_patient(conn, pcode, known, target_date)
-                        processed_in_this_run.add(pcode)
-                        processed_today.append(pcode)
+                stage_log("Экспорт CSV", status="старт", пациентов=len(unique_pcodes))
+                csv_path_med = csv_dir / "processed_patients.csv"
+                csv_path_pers = csv_dir / "processed_patients_personal_data.csv"
 
-                log.info(f"За {target_date} обработано пациентов: {len(processed_today)}")
-                all_processed_pcodes.extend(processed_today)
-            finally:
-                # сохраняем known ПОСЛЕ КАЖДОГО ДНЯ
-                save_known_patients(known)
-                log.debug(f"Сохранён known после дня {target_date}")
+                ok_med = export_patients_to_csv(conn, unique_pcodes, csv_path_med)
+                ok_pers = export_personal_data_to_csv(conn, unique_pcodes, csv_path_pers)
 
-    # Итоговые CSV по завершении запуска
-    if all_processed_pcodes:
-        try:
-            log.info(f"Создание итоговых CSV для {len(all_processed_pcodes)} пациентов...")
-            csv_path_med = CSV_DIR / "processed_patients.csv"
-            csv_path_pers = CSV_DIR / "processed_patients_personal_data.csv"
-            log.info(f"Сформирован CSV (медицинские): {csv_path_med}")
-            log.info(f"Сформирован CSV (персональные): {csv_path_pers}")
-            # Для экспорта нужны активные соединения/данные из БД
-            with get_connection(settings) as conn:
-                export_patients_to_csv(conn, all_processed_pcodes, csv_path_med)
-                export_personal_data_to_csv(conn, all_processed_pcodes, csv_path_pers)
-            log.info("CSV-файлы успешно созданы. Загружаем их в Битрикс...")
+                stage_log(
+                    "Экспорт CSV",
+                    status="успех" if (ok_med and ok_pers) else "частично",
+                    файл_med=str(csv_path_med),
+                    файл_pers=str(csv_path_pers),
+                )
 
-            # Режим интеграции
-            try:
-                mode = (settings.BITRIX_MODE or "").lower()
-                if mode == "api":
-                    from app.export.bitrix_api_loader import main as load_csv_to_bitrix_api
-                    log.info("Режим загрузки: Bitrix REST API")
-                    load_csv_to_bitrix_api(csv_path_med, csv_path_pers, settings)
-                elif mode == "selenium":
-                    from app.export.bitrix_loader import main as load_csv_to_bitrix_selenium
-                    log.info("Режим загрузки: Bitrix Selenium UI")
-                    load_csv_to_bitrix_selenium(csv_path_med, csv_path_pers, settings)
-                else:
-                    log.info("BITRIX_MODE не задан или неизвестен — пропускаю загрузку в Битрикс")
+                # Загрузка в Bitrix
+                try:
+                    if getattr(settings, "BITRIX_MODE", "api").lower() == "api":
+                        from app.export.bitrix_api_loader import main as load_csv_to_bitrix_api
+                        stage_log("Загрузка в Bitrix", status="старт", режим="REST API")
+                        load_csv_to_bitrix_api()
+                    else:
+                        from app.export.bitrix_loader import load_csv_to_bitrix
+                        stage_log("Загрузка в Bitrix", status="старт", режим="Selenium")
+                        load_csv_to_bitrix(settings)
+
+                    stage_log("Загрузка в Bitrix", status="успех")
+                except Exception as e:
+                    stage_log("Загрузка в Bitrix", status="ошибка", сообщение=str(e))
+
             except Exception as e:
-                log.exception(f"Ошибка загрузки CSV в Битрикс: {e}")
-        except Exception as e:
-            log.exception(f"Ошибка при формировании CSV: {e}")
-    else:
-        log.info("За запуск не обработано ни одного пациента — CSV не формируем")
+                stage_log("Экспорт CSV", status="ошибка", сообщение=str(e))
+        else:
+            stage_log("Экспорт CSV", status="пропуск", причина="нет пациентов")
+
+    stage_log("Обработка диапазона дат", status="завершено", всего_уникально=len(unique_pcodes))
 
 
-# -----------------------
-# CLI
-# -----------------------
-def build_date_range(args) -> List[date]:
-    if args.date:
-        # одна дата
-        d = parse_date_str(args.date)
-        log.info(f"Использую дату фильтра: {d.isoformat()}")
-        return [d]
-    if args.start and args.end:
-        start = parse_date_str(args.start)
-        end = parse_date_str(args.end)
-        if end < start:
-            raise SystemExit("END < START")
-        days = (end - start).days + 1
-        rng = [start + timedelta(days=i) for i in range(days)]
-        log.info(f"Диапазон дат: {start.isoformat()} — {end.isoformat()} ({len(rng)} дн.)")
-        return rng
-    # fallback: сегодня
-    today = date.today()
-    log.info(f"Дата не указана, используется сегодня: {today.isoformat()}")
-    return [today]
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Экспорт отчётов по пациентам")
-    g = parser.add_argument_group("Дата")
-    g.add_argument("--date", help="Одна дата (например, 2025-10-15 или 15.10.2025)")
-    g.add_argument("--start", help="Начало диапазона дат")
-    g.add_argument("--end", help="Конец диапазона дат")
-
-    parser.add_argument(
-        "--pcode",
-        help="Список PCODE через запятую (если задан, обрабатываем только их)",
-    )
-    return parser.parse_args()
-
+# ===================== CLI =====================
 
 if __name__ == "__main__":
-    args = parse_args()
-    drange = build_date_range(args)
+    parser = argparse.ArgumentParser(description="Сканирование пациентов и генерация отчетов")
+    parser.add_argument("--start-date", help="Начальная дата диапазона (dd.MM.yyyy)")
+    parser.add_argument("--end-date", help="Конечная дата диапазона (dd.MM.yyyy)")
+    parser.add_argument("--date", help="Одиночная дата (dd.MM.yyyy)")
+    parser.add_argument("--pcode", help="Фильтр по конкретному пациенту/пациентам (через запятую)")
+
+    args = parser.parse_args()
+
+    if args.start_date and args.end_date:
+        try:
+            start_date = datetime.strptime(args.start_date, "%d.%m.%Y").date()
+            end_date = datetime.strptime(args.end_date, "%d.%m.%Y").date()
+        except ValueError:
+            raise SystemExit("Ошибка: даты должны быть в формате dd.MM.yyyy")
+        if start_date > end_date:
+            raise SystemExit("Ошибка: начальная дата не может быть позже конечной")
+        date_range = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+    elif args.date:
+        try:
+            single_date = datetime.strptime(args.date, "%d.%m.%Y").date()
+            date_range = [single_date]
+        except ValueError:
+            raise SystemExit("Ошибка: укажи дату в формате dd.MM.yyyy")
+    else:
+        today = date.today()
+        date_range = [today]
 
     filter_pcodes: List[str] = []
     if args.pcode:
-        filter_pcodes = [p.strip() for p in args.pcode.split(",") if p.strip()]
+        pcode_list = [p.strip() for p in args.pcode.split(",")]
+        filter_pcodes = [p for p in pcode_list if p]
         if not filter_pcodes:
             raise SystemExit("Ошибка: указаны пустые PCODE")
-        log.info(f"Указаны PCODE для обработки: {', '.join(filter_pcodes)}")
 
-    main(drange, filter_pcodes)
+    main(date_range, filter_pcodes)

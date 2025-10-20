@@ -138,17 +138,27 @@ def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str,
 
 def _apply_excel_formatting(ws):
     """Форматирование Excel-листа"""
+    # 1) Шапка
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+    # 2) Ширины колонок по содержимому
     for col in ws.columns:
         max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max_length + 2
 
+    # 3) Общие выравнивания
     for row in ws.iter_rows():
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # 4) Фильтры на все столбцы + заморозка шапки (удобно)
+    if ws.max_row and ws.max_column:
+        first_cell = "A1"
+        last_cell = f"{get_column_letter(ws.max_column)}{ws.max_row}"
+        ws.auto_filter.ref = f"{first_cell}:{last_cell}"
+        ws.freeze_panes = "A2"  # опционально: закрепить строку заголовков
 
 
 def _write_excel_file(output_file: Path, rows: List[Dict[str, str]]):

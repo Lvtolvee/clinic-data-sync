@@ -49,15 +49,14 @@ def setup_logging(
         audit.setLevel(level.upper())
         audit.handlers.clear()  # на всякий случай, чтобы не накапливал
         audit.addHandler(ah)  # пишем в audit.log
-        audit.propagate = True  # и поднимаем запись на root → одна печать в консоли
+        audit.propagate = True  # и поднимаем запись на root - одна печать в консоли
 
     root._configured = True
 
 def get_logger(name: str = "app") -> logging.Logger:
     return logging.getLogger(name)
 
-# ---- Компактные бизнес-логи ----
-
+# Компактные бизнес-логи
 def _q(v: object) -> str:
     s = "" if v is None else str(v)
     return '"' + s.replace('"', '\\"') + '"'

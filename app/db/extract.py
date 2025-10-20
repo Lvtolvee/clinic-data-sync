@@ -5,8 +5,6 @@ from app.db.queries import (
     SQL_GET_APPROVED_PLANS, SQL_GET_APPROVED_PLANS_PAID, SQL_GET_TREATCODES,
     SQL_GET_STAGE, SQL_GET_FUTURE_APPOINTMENTS, SQL_GET_SCHEDULE_INFO
 )
-from datetime import date as _date
-
 
 log = get_logger(__name__)
 
@@ -87,7 +85,7 @@ def fetch_future_appointments(conn, pcode: str):
         status = "ОЖИДАЕТСЯ"
         if sched_info:
             duration = (sched_info["FHOUR"] * 60 + sched_info["FMIN"]) - (sched_info["BHOUR"] * 60 + sched_info["BMIN"])
-            if duration in (1, 10):
+            if duration in (1, 15):
                 status = "ОТМЕНЕНО"
 
         enriched.append({

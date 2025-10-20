@@ -1,7 +1,7 @@
 def format_patient_data(data: dict) -> dict:
     result = {}
 
-    # --- Основная информация ---
+    # Основная информация
     info = data.get("info") or {}
     result["ФИО"] = f"{info.get('LASTNAME', '')} {info.get('FIRSTNAME', '')} {info.get('MIDNAME', '')}".strip()
     result["Фамилия"] = info.get('LASTNAME', '')
@@ -29,16 +29,16 @@ def format_patient_data(data: dict) -> dict:
 
     result["Предстоящие приёмы"] = data.get("future_appointments", [])
 
-    # --- Параметры обследования ---
+    # Параметры обследования
     params = data.get("params") or []
     result["Параметры обследования"] = {p["NAMEPARAMS"]: p["VALUETEXT"] for p in params}
 
-    # --- Составной план лечения ---
+    # Составной план лечения
     comp_plan = data.get("composite_plan") or []
     result["Составной план"] = [p["CONCATENATION"] for p in comp_plan]
 
 
-    # --- Комплексные планы ---
+    # Комплексные планы
     complex_plans = data.get("complex_plans") or []
     pretty_complex = []
     for cp in complex_plans:

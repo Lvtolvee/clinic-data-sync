@@ -1,8 +1,9 @@
-pydantic>=2.7
-pydantic-settings>=2.4
-python-dotenv>=1.0
-fdb>=2.0
-tenacity>=8.2
-reportlab>=4.1
-playwright>=1.47
+pydantic
+pydantic-settings
+python-dotenv
+fdb
+tenacity
+reportlab
+playwright
 openpyxl
+selenium

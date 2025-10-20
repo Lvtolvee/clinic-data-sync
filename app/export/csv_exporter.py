@@ -1,5 +1,3 @@
-# app/export/csv_exporter.py
-
 from __future__ import annotations
 import csv
 from datetime import date, datetime
@@ -42,13 +40,14 @@ CSV_HEADERS = [
     "Комплексный план",
     "Стадия",
     "Текущая стадия лечения",
+    "Ответственный"
 ]
 
 
-# ======= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =======
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 
 def calculate_age(birth_date) -> str:
-    """Вычисляет возраст по дате рождения"""
+    # Счёт возраст по дате рождения
     try:
         if isinstance(birth_date, str):
             birth_date = datetime.strptime(birth_date, "%d.%m.%Y").date()
@@ -62,7 +61,7 @@ def calculate_age(birth_date) -> str:
 
 
 def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str, str]:
-    """Формирует строку данных для CSV/Excel"""
+    # Cтрока данных для CSV/Excel
     fullname = formatted_data.get("ФИО", "—")
     lname = formatted_data.get("Фамилия", "—")
     fname = formatted_data.get("Имя", "—")
@@ -76,7 +75,7 @@ def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str,
     first_visit_date = formatted_data.get("Дата первичного приёма")
     visits_count = formatted_data.get("Количество визитов в клинику", "—")
 
-    # --- Предстоящие приёмы ---
+    # Предстоящие приёмы
     future_appointments = formatted_data.get("Предстоящие приёмы", [])
     next_appointment = "—"
     canceled_exists = False
@@ -94,7 +93,7 @@ def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str,
                 canceled_exists = False
                 break
 
-    # --- Стоимости ---
+    # Стоимости
     complex_plans = formatted_data.get("Комплексные планы", [])
     prelim_cost = sum(plan.get("Итого", 0) for plan in complex_plans)
 
@@ -105,12 +104,19 @@ def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str,
     if approved_cost:
         plan_percent = (Decimal(paid_amount) / Decimal(approved_cost) * 100).quantize(Decimal("1"),
                                                                                       rounding=ROUND_HALF_UP)
-    # --- Стадия ---
+    # Стадия
     current_stage = formatted_data.get("Текущая стадия лечения", "—")
     if canceled_exists or not future_appointments:
         stage = "Нет записей"
     else:
         stage = current_stage
+
+    # Ответственный
+    response_person = "—"
+    if consultant != "—":
+        response_person = " ".join(consultant.split()[1:])
+    elif first_doctor != "—":
+        response_person = first_doctor
 
     return {
         "Название лида": fullname or "—",
@@ -133,11 +139,12 @@ def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str,
         "Комплексный план": "—",
         "Стадия": stage,
         "Текущая стадия лечения": current_stage,
+        "Ответственный": response_person,
     }
 
 
 def _apply_excel_formatting(ws):
-    """Форматирование Excel-листа"""
+    # Excel с форматированием
     # 1) Шапка
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -173,7 +180,7 @@ def _write_excel_file(output_file: Path, rows: List[Dict[str, str]]):
 
 
 def _append_to_management_report(management_path: Path, rows: List[Dict[str, str]]):
-    """Добавляет данные без дубликатов"""
+    # Данные без дубликатов
     if management_path.exists():
         wb = load_workbook(management_path)
         ws = wb.active
@@ -198,7 +205,7 @@ def _append_to_management_report(management_path: Path, rows: List[Dict[str, str
     log.info(f"Добавлено {added} новых записей в {management_path}")
 
 
-# ======= ОСНОВНАЯ ФУНКЦИЯ =======
+# ОСНОВНАЯ ФУНКЦИЯ
 
 def export_patients_to_csv(conn, patient_pcodes: List[str], output_file: Path) -> bool:
     """Создаёт processed_patients.csv, processed_patients.xlsx и обновляет management_report.xlsx"""
@@ -226,7 +233,7 @@ def export_patients_to_csv(conn, patient_pcodes: List[str], output_file: Path) -
             log.warning("Нет данных для экспорта пациентов.")
             return False
 
-        # 1️⃣ CSV без форматирования
+        # CSV без форматирования
         with open(csv_output, "w", newline="", encoding=CSV_ENCODING) as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, delimiter=CSV_DELIMITER)
             writer.writeheader()
@@ -234,11 +241,11 @@ def export_patients_to_csv(conn, patient_pcodes: List[str], output_file: Path) -
                 writer.writerow(row)
         log.info(f"Создан CSV-файл: {csv_output}")
 
-        # 2️⃣ Excel с форматированием
+        # Excel с форматированием
         _write_excel_file(excel_output, csv_rows)
         log.info(f"Создан Excel-файл: {excel_output}")
 
-        # 3️⃣ Обновление накопительного отчёта
+        # Обновление накопительного отчёта
         _append_to_management_report(management_path, csv_rows)
 
         return True
@@ -248,7 +255,7 @@ def export_patients_to_csv(conn, patient_pcodes: List[str], output_file: Path) -
         return False
 
 def export_personal_data_to_csv(conn, patient_pcodes: List[str], output_file: Path) -> bool:
-    """Создает CSV с персональными данными пациентов"""
+    # Cоздает CSV с персональными данными пациентов
     headers = ["Фамилия", "Имя", "Отчество", "Дата рождения", "Телефон", "Email", "Адрес"]
 
     try:

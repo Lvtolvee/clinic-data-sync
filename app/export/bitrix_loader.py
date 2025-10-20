@@ -2,12 +2,9 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait,Select
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
 import time
 import os
 
-from app.config import load_non_secret_env, Settings
 from app.logging import get_logger
 
 log = get_logger(__name__)
@@ -73,6 +70,7 @@ def load_csv_to_bitrix(settings):
     time.sleep(10)
     driver.find_element(By.CSS_SELECTOR, "input[type='file']").send_keys(lead_file_path)
     Select(driver.find_element(By.ID, 'import_file_encoding')).select_by_value('windows-1251')
+    Select(driver.find_element(By.NAME, 'IMPORT_NAME_FORMAT')).select_by_value('5')
     driver.find_element(By.ID, 'next').click()
     time.sleep(10)
     driver.find_element(By.NAME, 'next').click()

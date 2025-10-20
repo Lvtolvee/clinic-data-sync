@@ -1,5 +1,4 @@
 import csv
-import json
 import time
 import requests
 from pathlib import Path
@@ -109,7 +108,7 @@ def upload_contacts() -> list[dict]:
     log.info(f"Контактов обработано: {len(processed)}")
     return processed
 
-# ЗАГРУЗКА ЛИДОВ
+# Загрузка лидов
 def upload_leads(contacts: list[dict]):
     # Создание и обновление лидов, привязка к контактам
     rows = _read_csv(LEADS_CSV)

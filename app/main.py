@@ -1,4 +1,3 @@
-# app/main.py
 from __future__ import annotations
 
 import json
@@ -36,7 +35,7 @@ PDF_DIR = Path("output") / "reports"
 PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ===================== УТИЛИТЫ =====================
+# ТИЛИТЫ
 
 def _serialize_value(value):
     if value is None:
@@ -49,7 +48,7 @@ def _serialize_value(value):
 
 
 def calculate_patient_hash(patient_data: dict) -> str:
-    """Хешируем только значимые поля, чтобы детектить изменения."""
+    # Хешируем только значимые поля, чтобы детектить изменения
     info = patient_data.get("info", {})
 
     key_fields = {
@@ -137,7 +136,7 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
                 "last_updated": str(date.today()),
                 "processed_on": str(target_date),
             }
-            # --- ЕДИНСТВЕННАЯ строка на pcode ---
+            # ЕДИНСТВЕННАЯ строка на pcode
             if is_new:
                 patient_log(pcode, status="внесен", comment="новый пациент")
             else:
@@ -147,7 +146,7 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
             known.setdefault(pcode, {})
             known[pcode]["last_checked"] = str(target_date)
             known[pcode]["processed_on"] = str(target_date)
-            # --- ЕДИНСТВЕННАЯ строка на pcode ---
+            # ЕДИНСТВЕННАЯ строка на pcode
             if is_new:
                 # теоретически не должно случиться (новым обычно генерим PDF), но оставим на случай отсутствия данных
                 patient_log(pcode, status="внесен", comment="новый пациент")
@@ -161,43 +160,68 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
         patient_log(pcode, status="ошибка", comment="не удалось обработать", ошибка=str(e))
 
 
-# ===================== ОБХОД ДИАПАЗОНА ДАТ =====================
-
+# ОБХОД ДИАПАЗОНА ДАТ
 def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None:
-    stage_log("Обработка диапазона дат", status="старт", начало=str(date_range[0]), конец=str(date_range[-1]))
+    """
+    - Известные пациенты (из known_patients.json) обрабатываются один раз ДО цикла по датам.
+    - За каждый день периода дополняем ОДНИ и те же CSV-файлы (накопительно в рамках одного запуска).
+    - При новом запуске файлы пересоздаются с нуля.
+    - Загрузка в Bitrix выполняется один раз в конце запуска.
+    """
+    log.info(f"Запуск обработки за диапазон {date_range[0]} → {date_range[-1]}")
     known = load_known_patients()
 
-    # пациенты, обработанные за ВЕСЬ запуск (во всём диапазоне)
-    already_processed: set[str] = set()
+    all_processed_pcodes: list[str] = []
 
+    # Пути к CSV/Excel
     csv_dir = Path("output") / "csv"
     csv_dir.mkdir(parents=True, exist_ok=True)
+    csv_path_med = csv_dir / "processed_patients.csv"
+    csv_path_pers = csv_dir / "processed_patients_personal_data.csv"
+    xlsx_path_med = csv_dir / "processed_patients.xlsx"
+    mgmt_report = csv_dir / "management_report.xlsx"
+
+    # Новый запуск - очищаем итоговые файлы перед первой записью
+    for p in (csv_path_med, csv_path_pers, xlsx_path_med, mgmt_report):
+        try:
+            if p.exists():
+                p.unlink()
+                log.info(f"Старый файл удалён: {p}")
+        except Exception as e:
+            log.warning(f"Не удалось удалить {p}: {e}")
 
     with get_connection(settings) as conn:
+        # 0) Обрабатываем известных пациентов ДО цикла по датам
+        if not filter_pcodes:
+            log.info("Обновляем известных пациентов перед обработкой дат...")
+            processed_known: list[str] = []
+            for pcode, pdata in list(known.items()):
+                last_checked_str = pdata.get("last_checked")
+                try:
+                    last_checked = datetime.strptime(last_checked_str, "%Y-%m-%d").date() if last_checked_str else None
+                except ValueError:
+                    last_checked = None
+
+                # Проверяем только если не обновлялись сегодня или раньше последней даты диапазона
+                if not last_checked or last_checked < date_range[-1]:
+                    process_patient(conn, pcode, known, date_range[0])
+                    processed_known.append(pcode)
+
+            if processed_known:
+                all_processed_pcodes.extend(processed_known)
+                log.info(f"Обновлено известных пациентов: {len(processed_known)}")
+
+        # 1) Цикл по датам — обработка новых пациентов
         for target_date in date_range:
-            stage_log("Дата", status="обработка", значение=str(target_date))
+            log.info(f"\n=== Обработка за {target_date} ===")
+            processed_today: list[str] = []
 
-            # пациенты, обработанные В ЭТУ дату
-            processed_today: set[str] = set()
-            processed_list: list[str] = []
-
-            def _mark(p: str):
-                processed_today.add(p)
-                already_processed.add(p)
-                processed_list.append(p)
-                known.setdefault(p, {})
-                known[p]["processed_on"] = str(target_date)
-
-            # --- 1) Ручной фильтр по PCODE ---
+            # 1.1) Фильтр по конкретным PCODE
             if filter_pcodes:
                 for pcode in filter_pcodes:
-                    if pcode in processed_today or pcode in already_processed:
-                        continue
-
                     info = fetch_main_info(conn, pcode)
                     if not info:
-                        patient_log(pcode, status="пропущен", comment="не найден в БД")
-                        _mark(pcode)
+                        log.warning(f"Пациент с PCODE={pcode} не найден в базе")
                         continue
 
                     if pcode not in known:
@@ -206,109 +230,73 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
                             "last_appointment_date": None,
                             "data_hash": None,
                         }
+                        log.info(f"Новый пациент (по PCODE): {pcode} {info.get('LASTNAME','')} {info.get('FIRSTNAME','')}")
+                    process_patient(conn, pcode, known, target_date)
+                    processed_today.append(pcode)
 
-                    if known.get(pcode, {}).get("processed_on") == str(target_date):
-                        patient_log(pcode, status="пропущен", comment="уже обработан сегодня")
-                        _mark(pcode)
-                        continue
-
-                    process_patient(conn, pcode, known, target_date, is_new=(known[pcode].get("data_hash") is None))
-                    _mark(pcode)
-
-            # --- 2) Известные пациенты (если нет ручного фильтра) ---
+            # 1.2) Первички текущей даты (если нет фильтра)
             if not filter_pcodes:
-                for pcode, pdata in list(known.items()):
-                    if pcode in processed_today or pcode in already_processed:
-                        continue
-
-                    if pdata.get("processed_on") == str(target_date):
-                        _mark(pcode)
-                        continue
-
-                    last_checked_str = pdata.get("last_checked")
+                new_patients = fetch_primary_patients_today(conn, target_date)
+                for p in new_patients:
+                    pcode = str(p["PCODE"])
+                    last_checked_str = known.get(pcode, {}).get("last_checked")
                     try:
                         last_checked = datetime.strptime(last_checked_str, "%Y-%m-%d").date() if last_checked_str else None
                     except ValueError:
                         last_checked = None
 
                     if not last_checked or last_checked < target_date:
-                        process_patient(conn, pcode, known, target_date, is_new=(pdata.get("data_hash") is None))
-                        _mark(pcode)
+                        if pcode not in known:
+                            known[pcode] = {
+                                "last_checked": str(target_date),
+                                "last_appointment_date": None,
+                                "data_hash": None,
+                            }
+                            log.info(f"Новый пациент (по дате): {pcode} {p.get('LASTNAME','')} {p.get('FIRSTNAME','')}")
+                        process_patient(conn, pcode, known, target_date)
+                        processed_today.append(pcode)
 
-            # --- 3) Первичка по текущей дате (если нет ручного фильтра) ---
-            if not filter_pcodes:
-                new_patients = fetch_primary_patients_today(conn, target_date)
-                for p in new_patients:
-                    pcode = str(p["PCODE"])
-                    if pcode in processed_today or pcode in already_processed:
-                        continue
-
-                    if pcode not in known:
-                        known[pcode] = {
-                            "last_checked": str(target_date),
-                            "last_appointment_date": None,
-                            "data_hash": None,
-                        }
-
-                    if known[pcode].get("processed_on") == str(target_date):
-                        _mark(pcode)
-                        continue
-
-                    # если известен, но давно не проверялся — обработаем
-                    last_checked_str = known[pcode].get("last_checked")
-                    try:
-                        last_checked = datetime.strptime(last_checked_str, "%Y-%m-%d").date() if last_checked_str else None
-                    except ValueError:
-                        last_checked = None
-
-                    process_patient(conn, pcode, known, target_date, is_new=(known[pcode].get("data_hash") is None))
-                    _mark(pcode)
-
-            stage_log("Дата", status="итог", значение=str(target_date), обработано=len(processed_list))
-            save_known_patients(known)
-
-        # --- Экспорт CSV по уникальным pcode за запуск ---
-        unique_pcodes = sorted(already_processed)
-        if unique_pcodes:
-            try:
-                stage_log("Экспорт CSV", status="старт", пациентов=len(unique_pcodes))
-                csv_path_med = csv_dir / "processed_patients.csv"
-                csv_path_pers = csv_dir / "processed_patients_personal_data.csv"
-
-                ok_med = export_patients_to_csv(conn, unique_pcodes, csv_path_med)
-                ok_pers = export_personal_data_to_csv(conn, unique_pcodes, csv_path_pers)
-
-                stage_log(
-                    "Экспорт CSV",
-                    status="успех" if (ok_med and ok_pers) else "частично",
-                    файл_med=str(csv_path_med),
-                    файл_pers=str(csv_path_pers),
-                )
-
-                # Загрузка в Bitrix
+            # 1.3) Экспорт накопительно за день
+            if processed_today:
+                all_processed_pcodes.extend(processed_today)
+                unique_pcodes = sorted(set(all_processed_pcodes))
                 try:
-                    if getattr(settings, "BITRIX_MODE", "api").lower() == "api":
-                        from app.export.bitrix_api_loader import main as load_csv_to_bitrix_api
-                        stage_log("Загрузка в Bitrix", status="старт", режим="REST API")
-                        load_csv_to_bitrix_api()
-                    else:
-                        from app.export.bitrix_loader import load_csv_to_bitrix
-                        stage_log("Загрузка в Bitrix", status="старт", режим="Selenium")
-                        load_csv_to_bitrix(settings)
-
-                    stage_log("Загрузка в Bitrix", status="успех")
+                    export_patients_to_csv(conn, unique_pcodes, csv_path_med)
+                    export_personal_data_to_csv(conn, unique_pcodes, csv_path_pers)
+                    log.info(
+                        f"Экспорт CSV после {target_date}: добавлено {len(processed_today)}, всего {len(unique_pcodes)} пациентов"
+                    )
                 except Exception as e:
-                    stage_log("Загрузка в Bitrix", status="ошибка", сообщение=str(e))
+                    log.error(f"Ошибка экспорта CSV за {target_date}: {e}")
+            else:
+                log.info(f"Нет новых пациентов за {target_date}")
 
+        # Сохраняем обновлённый known один раз
+        save_known_patients(known)
+        log.info(f"Файл known_patients.json обновлён ({len(known)} записей)")
+
+        # 2) Загрузка CSV в Bitrix в конце запуска
+        if all_processed_pcodes:
+            try:
+                log.info("Начинаем загрузку CSV в Битрикс...")
+                if settings.BITRIX_MODE.lower() == "api":
+                    from app.export.bitrix_api_loader import main as load_csv_to_bitrix_api
+                    log.info("Режим загрузки: Bitrix REST API")
+                    load_csv_to_bitrix_api()
+                else:
+                    from app.export.bitrix_loader import load_csv_to_bitrix
+                    log.info("Режим загрузки: Selenium")
+                    load_csv_to_bitrix(settings)
+                log.info("Загрузка CSV в Битрикс завершена успешно")
             except Exception as e:
-                stage_log("Экспорт CSV", status="ошибка", сообщение=str(e))
+                log.error(f"Ошибка при загрузке CSV в Bitrix24: {e}")
         else:
-            stage_log("Экспорт CSV", status="пропуск", причина="нет пациентов")
+            log.warning("Нет данных для загрузки в Битрикс")
 
-    stage_log("Обработка диапазона дат", status="завершено", всего_уникально=len(unique_pcodes))
+    log.info(f"Обработка диапазона завершена. Всего уникальных пациентов: {len(set(all_processed_pcodes))}")
 
 
-# ===================== CLI =====================
+# CLI
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Сканирование пациентов и генерация отчетов")

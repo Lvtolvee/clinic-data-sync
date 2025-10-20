@@ -65,7 +65,7 @@ def _resolve_report_path(
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir / f"{pcode}.pdf"
 
-    raise ValueError("Either output_dir or output_file must be provided")
+    raise ValueError("Должен быть указан либо output_dir, либо output_file")
 
 
 def _render_report(data: Mapping[str, Any], report_path: Path) -> Path:
@@ -273,7 +273,7 @@ def _build_patient_report(
 ) -> Path:
     if patient_data is None:
         if conn is None:
-            raise ValueError("Either patient_data or conn must be provided")
+            raise ValueError("Необходимо указать либо patient_data, либо conn")
         patient_data = collect_patient_data(conn, pcode)
 
     report_path = _resolve_report_path(pcode, output_dir, output_file)
@@ -283,18 +283,18 @@ def _build_patient_report(
 
 def build_patient_report(*args, **kwargs) -> Path:
     if not args:
-        raise TypeError("build_patient_report() missing required argument: 'pcode'")
+        raise TypeError("в build_patient_report() отсутствует обязательный аргумент: 'pcode'")
 
     # Legacy positional signature: (conn, pcode, output_file)
     if not isinstance(args[0], str):
         if len(args) != 3:
             raise TypeError(
-                "Legacy call must pass exactly (conn, pcode, output_file) positional arguments"
+                "Устаревший вызов должен точно передавать позиционные аргументы (conn, pcode, output_file)"
             )
 
         conn, pcode, output_file = args
         if kwargs:
-            raise TypeError("Legacy call does not accept keyword arguments")
+            raise TypeError("Устаревший вызов не принимает аргументы ключевого слова")
         return _build_patient_report(
             pcode,
             conn=conn,
@@ -311,22 +311,22 @@ def build_patient_report(*args, **kwargs) -> Path:
 
     if kwargs:
         unexpected = ", ".join(sorted(kwargs.keys()))
-        raise TypeError(f"Unexpected keyword arguments: {unexpected}")
+        raise TypeError(f"Неожиданные аргументы ключевого слова: {unexpected}")
 
     if remaining:
         if patient_data is None:
             patient_data = remaining[0]
         else:
-            raise TypeError("patient_data provided both positionally and as keyword")
+            raise TypeError("patient_data предоставляется как позиционно, так и в виде ключевого слова")
 
     if len(remaining) > 1:
         if output_dir is None:
             output_dir = remaining[1]
         else:
-            raise TypeError("output_dir provided both positionally and as keyword")
+            raise TypeError("output_dir указывается как позиционно, так и в качестве ключевого слова")
 
     if len(remaining) > 2:
-        raise TypeError("Too many positional arguments for build_patient_report")
+        raise TypeError("Слишком много позиционных аргументов для build_patient_report")
 
     return _build_patient_report(
         pcode,

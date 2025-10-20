@@ -121,10 +121,6 @@ def process_patient(conn, pcode: str, known: Dict[str, Dict[str, Any]], target_d
     future_appts = fetch_future_appointments(conn, pcode)
     log.info(f"Пациент {pcode} — записей на будущее: {len(future_appts)}")
 
-    # будущие записи — только чтобы залогировать количество
-    future_appts = fetch_future_appointments(conn, pcode)
-    log.info(f"Пациент {pcode} — записей на будущее: {len(future_appts)}")
-
     # собираем данные пациента (без лишних аргументов)
     data = collect_patient_data(conn, pcode)
 
@@ -134,7 +130,7 @@ def process_patient(conn, pcode: str, known: Dict[str, Dict[str, Any]], target_d
 
     if new_hash != old_hash:
         try:
-            build_patient_report(data, PDF_DIR)
+            build_patient_report(pcode, data, PDF_DIR)
             log.info(f"Пациент {pcode} — отчёт обновлён")
         except Exception as e:
             log.exception(f"Пациент {pcode} — ошибка при сборке отчёта: {e}")

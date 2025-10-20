@@ -1,43 +1,87 @@
+from __future__ import annotations
+
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    SimpleDocTemplate,
+    KeepTogether,
+    PageBreak,
     Paragraph,
+    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
-    KeepTogether,
-    PageBreak
 )
-from reportlab.lib import colors
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 
 from app.db.extract import collect_patient_data
 from app.utils.formatting import format_patient_data
 
-# Регистрируем шрифт для кириллицы
-pdfmetrics.registerFont(TTFont("Arial", "C:/Windows/Fonts/arial.ttf"))
+
+def _register_preferred_font(font_name: str, candidates: Iterable[Path]) -> str:
+    for candidate in candidates:
+        if candidate.exists():
+            pdfmetrics.registerFont(TTFont(font_name, str(candidate)))
+            return font_name
+    return "Helvetica"
 
 
-def build_patient_report(conn, pcode: str, output_file: str):
-    raw = collect_patient_data(conn, pcode)
-    data = format_patient_data(raw)
+FONT_NAME = _register_preferred_font(
+    "Arial",
+    (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("C:/Windows/Fonts/arial.ttf"),
+    ),
+)
 
-    doc = SimpleDocTemplate(output_file, pagesize=A4)
+
+def _format_future_date(raw: str | None) -> str:
+    if not raw:
+        return "—"
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y.%m.%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d.%m.%Y")
+        except ValueError:
+            continue
+    return raw
+
+
+def _resolve_report_path(
+    pcode: str, output_dir: Path | str | None, output_file: Path | str | None
+) -> Path:
+    if output_file is not None:
+        report_path = Path(output_file)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        return report_path
+
+    if output_dir is not None:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"{pcode}.pdf"
+
+    raise ValueError("Either output_dir or output_file must be provided")
+
+
+def _render_report(data: Mapping[str, Any], report_path: Path) -> Path:
+    doc = SimpleDocTemplate(str(report_path), pagesize=A4)
     styles = getSampleStyleSheet()
     normal = styles["Normal"]
-    normal.fontName = "Arial"
+    normal.fontName = FONT_NAME
 
     title_style = ParagraphStyle(
         "Title",
         parent=styles["Heading1"],
         alignment=1,
         spaceAfter=10,
-        fontName="Arial",
+        fontName=FONT_NAME,
     )
-    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontName="Arial")
+    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontName=FONT_NAME)
 
     story = []
 
@@ -76,7 +120,7 @@ def build_patient_report(conn, pcode: str, output_file: str):
         ]]
         for r in future:
             table_data.append([
-                Paragraph(datetime.strptime(r["Дата"], "%Y-%m-%d").strftime("%d.%m.%Y"), normal),
+                Paragraph(_format_future_date(r.get("Дата")), normal),
                 Paragraph(r["Филиал"] or "—", normal),
                 Paragraph(r["Доктор"] or "—", normal),
                 Paragraph(r["Комментарий"] or "—", normal),
@@ -86,7 +130,7 @@ def build_patient_report(conn, pcode: str, output_file: str):
         table.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-            ("FONTNAME", (0, 0), (-1, -1), "Arial"),
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("ALIGN", (0, 0), (0, -1), "CENTER"),  # выравнивание даты
@@ -125,7 +169,7 @@ def build_patient_report(conn, pcode: str, output_file: str):
             table.setStyle(TableStyle([
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                ("FONTNAME", (0, 0), (-1, -1), "Arial"),
+                ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.whitesmoke),
                 ("ALIGN", (1, 1), (-1, -1), "CENTER"),
@@ -180,7 +224,7 @@ def build_patient_report(conn, pcode: str, output_file: str):
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.lightgrey),
-                ("FONTNAME", (0, 0), (-1, -1), "Arial"),
+                ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
                 ("FONTSIZE", (0, 0), (-1, -1), 8),
                 ("ALIGN", (1, 1), (-1, -1), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -215,3 +259,79 @@ def build_patient_report(conn, pcode: str, output_file: str):
 
     # Генерация PDF
     doc.build(story)
+
+    return report_path
+
+
+def _build_patient_report(
+    pcode: str,
+    *,
+    patient_data: Mapping[str, Any] | None = None,
+    output_dir: Path | str | None = None,
+    conn: Any | None = None,
+    output_file: Path | str | None = None,
+) -> Path:
+    if patient_data is None:
+        if conn is None:
+            raise ValueError("Either patient_data or conn must be provided")
+        patient_data = collect_patient_data(conn, pcode)
+
+    report_path = _resolve_report_path(pcode, output_dir, output_file)
+    formatted = format_patient_data(dict(patient_data))
+    return _render_report(formatted, report_path)
+
+
+def build_patient_report(*args, **kwargs) -> Path:
+    if not args:
+        raise TypeError("build_patient_report() missing required argument: 'pcode'")
+
+    # Legacy positional signature: (conn, pcode, output_file)
+    if not isinstance(args[0], str):
+        if len(args) != 3:
+            raise TypeError(
+                "Legacy call must pass exactly (conn, pcode, output_file) positional arguments"
+            )
+
+        conn, pcode, output_file = args
+        if kwargs:
+            raise TypeError("Legacy call does not accept keyword arguments")
+        return _build_patient_report(
+            pcode,
+            conn=conn,
+            output_file=output_file,
+        )
+
+    pcode = args[0]
+    remaining = args[1:]
+
+    patient_data = kwargs.pop("patient_data", None)
+    output_dir = kwargs.pop("output_dir", None)
+    output_file = kwargs.pop("output_file", None)
+    conn = kwargs.pop("conn", None)
+
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs.keys()))
+        raise TypeError(f"Unexpected keyword arguments: {unexpected}")
+
+    if remaining:
+        if patient_data is None:
+            patient_data = remaining[0]
+        else:
+            raise TypeError("patient_data provided both positionally and as keyword")
+
+    if len(remaining) > 1:
+        if output_dir is None:
+            output_dir = remaining[1]
+        else:
+            raise TypeError("output_dir provided both positionally and as keyword")
+
+    if len(remaining) > 2:
+        raise TypeError("Too many positional arguments for build_patient_report")
+
+    return _build_patient_report(
+        pcode,
+        patient_data=patient_data,
+        output_dir=output_dir,
+        conn=conn,
+        output_file=output_file,
+    )

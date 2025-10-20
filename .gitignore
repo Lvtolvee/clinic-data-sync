@@ -8,6 +8,7 @@ __pycache__/
 *.sqlite
 *.json
 .env
+.venv
 venv/
 .env.*
 .idea/

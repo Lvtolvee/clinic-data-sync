@@ -168,10 +168,15 @@ def convert_patient_data_to_csv_row(data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Стадия
     current_stage = data.get("Текущая стадия лечения", "—")
-    if canceled_exists or not future_appointments:
+    if current_stage in ["Санирован", "Отказ от лечения", "Подготовка к лечению"]:
+        stage = "Санирован"
+    elif (canceled_exists or not future_appointments) and current_stage not in ["Не готов к реализации плана лечения",
+                                                                                "Лечение в условиях медикаментозного сна",
+                                                                                "Направлен в отделение профилактики на гигиену полости рта"]:
         stage = "Нет записей"
     else:
         stage = current_stage
+
 
     # Ответственный
     consultant = data.get("ФИО консультанта", "—")

@@ -285,7 +285,6 @@ def build_patient_report(*args, **kwargs) -> Path:
     if not args:
         raise TypeError("в build_patient_report() отсутствует обязательный аргумент: 'pcode'")
 
-    # Legacy positional signature: (conn, pcode, output_file)
     if not isinstance(args[0], str):
         if len(args) != 3:
             raise TypeError(

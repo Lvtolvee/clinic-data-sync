@@ -36,17 +36,14 @@ LEFT JOIN (
         r.SCHEDULE_WORKDATE AS FirstWorkDate, 
         r.DCODE, 
         fil.FULLNAME AS FILIAL_NAME,
-        COALESCE(
-            CASE
-                WHEN (r.REKLAMA_FROMDCODE IS NOT NULL AND r.REKLAMA_FROMDCODE <> 0)
-                   OR (r.REKLAMA_FROMPCODE IS NOT NULL AND r.REKLAMA_FROMPCODE <> 0)
-                THEN 1
-                ELSE 0
-            END, 0
-        ) AS REKLAMA,
-        m.VISIT_COUNT  -- ✅ пробрасываем наружу
+        CASE 
+            WHEN s.STATUS = 990000575 THEN 1 
+            ELSE 0 
+        END AS REKLAMA,
+        m.VISIT_COUNT
     FROM REP_SCHED_APPEALS_VIEW r
     LEFT JOIN FILIALS fil ON r.SCHEDFILIAL = fil.FILID
+    JOIN SCHEDULE s ON s.SCHEDID = r.SCHEDID
     JOIN (
         SELECT 
             r.PCODE,

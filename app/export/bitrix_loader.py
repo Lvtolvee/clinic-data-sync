@@ -1,9 +1,11 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait,Select
+from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import NoSuchElementException
 import time
 import os
+
 
 from app.logging import get_logger
 
@@ -23,12 +25,17 @@ def load_csv_to_bitrix(settings):
     lead_url = settings.BITRIX_IMPORT_LEAD_URL
     disk_url=settings.BITRIX_IMPORT_DISK_URL
 
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
 
     # Инициализация драйвера для браузера
     if browser == 'firefox':
-        driver = webdriver.Firefox()
+        driver = webdriver.Firefox(options=options)
     elif browser == 'chrome':
-        driver = webdriver.Chrome()
+        driver = webdriver.Chrome(options=options)
     else:
         raise ValueError("Unsupported browser")
 

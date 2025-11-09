@@ -5,11 +5,11 @@ SELECT
     c.FIRSTNAME,
     c.MIDNAME,
     COALESCE(
-    NULLIF(TRIM(c.ADDRFULL), ''),
-    NULLIF(TRIM(c.KLADR_ADDRFULL), ''),
-    TRIM(c.CITY) || ', ' || TRIM(c.STREETNAME) || ', д. ' || TRIM(c.ADDR) ||
-    COALESCE(', корп. ' || NULLIF(TRIM(c.CORP), ''), '') ||
-    COALESCE(', кв. ' || NULLIF(TRIM(c.FLAT), ''), '')
+        NULLIF(TRIM(c.ADDRFULL), ''),
+        NULLIF(TRIM(c.KLADR_ADDRFULL), ''),
+        TRIM(c.CITY) || ', ' || TRIM(c.STREETNAME) || ', д. ' || TRIM(c.ADDR) ||
+        COALESCE(', корп. ' || NULLIF(TRIM(c.CORP), ''), '') ||
+        COALESCE(', кв. ' || NULLIF(TRIM(c.FLAT), ''), '')
     ) AS FULL_ADDR,
     c.BDATE,
     d_cons.DNAME AS CONSULT_DOCTOR,
@@ -24,16 +24,38 @@ SELECT
     c.AGESTATUS,
     c.TYPESTATUS,
     cls1.SNAME AS AGESTATUS_NAME,
-    cls2.SNAME AS TYPESTATUS_NAME
+    cls2.SNAME AS TYPESTATUS_NAME,
+    sch.FILIAL_NAME,
+    sch.REKLAMA AS REKLAMA,
+    sch.VISIT_COUNT AS VISIT_COUNT
 FROM CLIENTS c
 LEFT JOIN DOCTOR d_cons ON d_cons.DCODE = c.DCODE_CONSULT
 LEFT JOIN (
-    SELECT r.PCODE, r.SCHEDULE_WORKDATE AS FirstWorkDate, r.DCODE
+    SELECT 
+        r.PCODE, 
+        r.SCHEDULE_WORKDATE AS FirstWorkDate, 
+        r.DCODE, 
+        fil.FULLNAME AS FILIAL_NAME,
+        COALESCE(
+            CASE
+                WHEN (r.REKLAMA_FROMDCODE IS NOT NULL AND r.REKLAMA_FROMDCODE <> 0)
+                   OR (r.REKLAMA_FROMPCODE IS NOT NULL AND r.REKLAMA_FROMPCODE <> 0)
+                THEN 1
+                ELSE 0
+            END, 0
+        ) AS REKLAMA,
+        m.VISIT_COUNT  -- ✅ пробрасываем наружу
     FROM REP_SCHED_APPEALS_VIEW r
+    LEFT JOIN FILIALS fil ON r.SCHEDFILIAL = fil.FILID
     JOIN (
-        SELECT PCODE, MIN(SCHEDULE_WORKDATE) AS MinWorkDate
-        FROM REP_SCHED_APPEALS_VIEW
-        GROUP BY PCODE
+        SELECT 
+            r.PCODE,
+            MIN(r.SCHEDULE_WORKDATE) AS MinWorkDate,
+            COUNT(r.SCHEDID) AS VISIT_COUNT
+        FROM REP_SCHED_APPEALS_VIEW r
+        JOIN SCHEDULE s ON s.SCHEDID = r.SCHEDID
+        WHERE ((s.FHOUR * 60 + s.FMIN) - (s.BHOUR * 60 + s.BMIN)) > 15
+        GROUP BY r.PCODE
     ) m ON m.PCODE = r.PCODE AND m.MinWorkDate = r.SCHEDULE_WORKDATE
 ) sch ON sch.PCODE = c.PCODE
 LEFT JOIN DOCTOR d_first ON d_first.DCODE = sch.DCODE
@@ -152,9 +174,11 @@ SELECT
 FROM CLIENTS c
 JOIN (
     SELECT
-      r.PCODE,
-      MIN(r.SCHEDULE_WORKDATE) AS FIRSTWORKDATE
+        r.PCODE,
+        MIN(r.SCHEDULE_WORKDATE) AS FIRSTWORKDATE
     FROM REP_SCHED_APPEALS_VIEW r
+    JOIN SCHEDULE s ON s.SCHEDID = r.SCHEDID
+    WHERE ((s.FHOUR * 60 + s.FMIN) - (s.BHOUR * 60 + s.BMIN)) > 15
     GROUP BY r.PCODE
 ) f
   ON f.PCODE = c.PCODE

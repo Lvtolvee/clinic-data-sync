@@ -1,24 +1,33 @@
-# Python
+# Исключить сборки и временные файлы
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.pkl
-*.log
-*.sqlite
-*.json
+
+# Исключить файлы, которые не нужны в гите
+.dockerignore
+Dockerfile
+docker-compose.yml
 .env
+clinic_data_sync.tar
+known_patients.json
+
+
+# Исключить виртуальное окружение
 .venv
 venv/
-.env.*
+
+# Исключить системные файлы IDE
 .idea/
 .vscode/
-dist/
-build/
+
+# Исключить логи и отчёты
 logs/
-tests/
+log/
 output/
-state/*.db
-playwright-report/
-test-results/
-requirements-dev.txt
+*.log
+*.csv
+*.xlsx
+*.pdf
+

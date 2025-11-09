@@ -14,8 +14,11 @@ def format_patient_data(data: dict) -> dict:
         [t for t in [info.get("PHONE1"), info.get("PHONE2"), info.get("PHONE3")] if t]
     ) or "—"
     result["Email"] = info.get("CLMAIL") or "—"
-
-    # Новый блок
+    #Филиал
+    result["Филиал"] = info.get("FILIAL_NAME") or "—"
+    #По рекомендации
+    result["По рекомендации"] = info.get("REKLAMA") or 0
+    # ФИО консультанта
     result["ФИО консультанта"] = info.get("CONSULT_DOCTOR") or "—"
     # Дата первичного приёма
     fw = info.get("FIRSTWORKDATE")
@@ -25,7 +28,7 @@ def format_patient_data(data: dict) -> dict:
     result["Тип пациента"] = info.get("TYPESTATUS_NAME") or "—"
     result["Текущая стадия лечения"] = data.get("current_stage") or "—"
     approved_plans = data.get("approved_plans") or []
-    result["Количество визитов в клинику"] = len(approved_plans) or "Информация отсутсвует"
+    result["Количество визитов в клинику"] = info.get("VISIT_COUNT") or 0
 
     result["Предстоящие приёмы"] = data.get("future_appointments", [])
 

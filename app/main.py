@@ -35,7 +35,7 @@ PDF_DIR = Path("output") / "reports"
 PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ТИЛИТЫ
+# уТИЛИТЫ
 
 def _serialize_value(value):
     if value is None:
@@ -72,6 +72,7 @@ def calculate_patient_hash(patient_data: dict) -> str:
         "approved_plans_count": len(patient_data.get("approved_plans", [])),
         "total_sum": _serialize_value(info.get("total_sum")),
         "paid_sum": _serialize_value(info.get("paid_sum")),
+        "filial": _serialize_value(info.get("FILIAL")),
     }
 
     data_str = json.dumps(key_fields, sort_keys=True, ensure_ascii=False)
@@ -93,16 +94,9 @@ def save_known_patients(data: dict) -> None:
     DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ===================== ОСНОВНАЯ ОБРАБОТКА ПАЦИЕНТА =====================
+#ОСНОВНАЯ ОБРАБОТКА ПАЦИЕНТА
 
 def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bool = False) -> None:
-    """
-    Обрабатывает пациента и пишет РОВНО ОДНУ строку patient_log:
-      - новый -> статус="внесен", комментарий="новый пациент"
-      - изменился -> статус="обновлен", комментарий="генерация отчёта"
-      - без изменений -> статус="пропущен", комментарий="без изменений"
-      - ошибка -> статус="ошибка", комментарий="не удалось обработать"
-    """
     try:
         current_data = collect_patient_data(conn, pcode)
         current_hash = calculate_patient_hash(current_data)
@@ -148,7 +142,6 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
             known[pcode]["processed_on"] = str(target_date)
             # ЕДИНСТВЕННАЯ строка на pcode
             if is_new:
-                # теоретически не должно случиться (новым обычно генерим PDF), но оставим на случай отсутствия данных
                 patient_log(pcode, status="внесен", comment="новый пациент")
             else:
                 patient_log(pcode, status="пропущен", comment="без изменений")
@@ -162,12 +155,6 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
 
 # ОБХОД ДИАПАЗОНА ДАТ
 def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None:
-    """
-    - Известные пациенты (из known_patients.json) обрабатываются один раз ДО цикла по датам.
-    - За каждый день периода дополняем ОДНИ и те же CSV-файлы (накопительно в рамках одного запуска).
-    - При новом запуске файлы пересоздаются с нуля.
-    - Загрузка в Bitrix выполняется один раз в конце запуска.
-    """
     log.info(f"Запуск обработки за диапазон {date_range[0]} → {date_range[-1]}")
     known = load_known_patients()
 
@@ -191,7 +178,7 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
             log.warning(f"Не удалось удалить {p}: {e}")
 
     with get_connection(settings) as conn:
-        # 0) Обрабатываем известных пациентов ДО цикла по датам
+        # Обрабатываем известных пациентов ДО цикла по датам
         if not filter_pcodes:
             log.info("Обновляем известных пациентов перед обработкой дат...")
             processed_known: list[str] = []
@@ -211,12 +198,12 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
                 all_processed_pcodes.extend(processed_known)
                 log.info(f"Обновлено известных пациентов: {len(processed_known)}")
 
-        # 1) Цикл по датам — обработка новых пациентов
+        # Цикл по датам — обработка новых пациентов
         for target_date in date_range:
             log.info(f"\n=== Обработка за {target_date} ===")
             processed_today: list[str] = []
 
-            # 1.1) Фильтр по конкретным PCODE
+            # Фильтр по конкретным PCODE
             if filter_pcodes:
                 for pcode in filter_pcodes:
                     info = fetch_main_info(conn, pcode)
@@ -234,7 +221,7 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
                     process_patient(conn, pcode, known, target_date)
                     processed_today.append(pcode)
 
-            # 1.2) Первички текущей даты (если нет фильтра)
+            # Первички текущей даты (если нет фильтра)
             if not filter_pcodes:
                 new_patients = fetch_primary_patients_today(conn, target_date)
                 for p in new_patients:
@@ -256,7 +243,7 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
                         process_patient(conn, pcode, known, target_date)
                         processed_today.append(pcode)
 
-            # 1.3) Экспорт накопительно за день
+            # Экспорт накопительно за день
             if processed_today:
                 all_processed_pcodes.extend(processed_today)
                 unique_pcodes = sorted(set(all_processed_pcodes))
@@ -271,11 +258,12 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
             else:
                 log.info(f"Нет новых пациентов за {target_date}")
 
+
         # Сохраняем обновлённый known один раз
         save_known_patients(known)
         log.info(f"Файл known_patients.json обновлён ({len(known)} записей)")
 
-        # 2) Загрузка CSV в Bitrix в конце запуска
+        # Загрузка CSV в Bitrix в конце запуска
         if all_processed_pcodes:
             try:
                 log.info("Начинаем загрузку CSV в Битрикс...")

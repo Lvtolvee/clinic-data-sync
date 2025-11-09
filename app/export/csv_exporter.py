@@ -14,43 +14,47 @@ from app.utils.formatting import format_patient_data
 
 log = get_logger(__name__)
 
-# Настройки
 CSV_ENCODING = "cp1251"
 CSV_DELIMITER = ";"
 
-# Заголовки отчёта
 CSV_HEADERS = [
-    "Название лида",
-    "Фамилия",
-    "Имя",
-    "Отчество",
-    "Возраст пациента",
-    "ФИО консультанта пациента",
-    "Тип пациента 1",
-    "Тип пациента 2",
-    "Наличие/отсутствие снимка ОПТГ у пациента",
-    "ФИО доктора, проводившего первичный прием",
-    "Дата первого визита",
+    "Название лида", "Фамилия", "Имя", "Отчество", "Возраст пациента",
+    "ФИО консультанта пациента", "Тип пациента 1", "Тип пациента 2",
+    "ФИО доктора, проводившего первичный прием", "Дата первого визита",
     "Количество визитов в клинику",
     "Дата следующего приема и ФИО доктора, к кому пациент записан на прием",
-    "Стоимость всех предварительных планов",
-    "Стоимость всех согласованных планов",
-    "Сумма оплаченных денег пациентом в клинику",
-    "Процент выполнения плана",
-    "Комплексный план",
-    "Стадия",
-    "Текущая стадия лечения",
-    "Ответственный"
+    "Стоимость всех предварительных планов, руб.",
+    "Стоимость всех согласованных планов, руб.",
+    "Сумма оплаченных денег пациентом в клинику, руб.",
+    "Процент выполнения плана, %",
+    "Стадия", "Текущая стадия лечения", "Ответственный", "Филиал", "По рекомендации",
 ]
 
+REPORT_HEADERS = [
+    "ФИО", "Возраст пациента", "ФИО консультанта пациента", "Тип пациента 1",
+    "Тип пациента 2", "ФИО доктора, проводившего первичный прием", "Дата первого визита",
+    "Количество визитов в клинику",
+    "Дата следующего приема и ФИО доктора, к кому пациент записан на прием",
+    "Стоимость всех предварительных планов, руб.",
+    "Стоимость всех согласованных планов, руб.",
+    "Сумма оплаченных денег пациентом в клинику, руб.",
+    "Процент выполнения плана, %",
+    "Текущая стадия лечения", "Ответственный", "Филиал", "По рекомендации",
+]
 
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# Доп функции
 
 def calculate_age(birth_date) -> str:
-    # Счёт возраст по дате рождения
+    if not birth_date:
+        return "—"
     try:
         if isinstance(birth_date, str):
-            birth_date = datetime.strptime(birth_date, "%d.%m.%Y").date()
+            for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+                try:
+                    birth_date = datetime.strptime(birth_date, fmt).date()
+                    break
+                except Exception:
+                    continue
         elif isinstance(birth_date, datetime):
             birth_date = birth_date.date()
         today = date.today()
@@ -60,223 +64,238 @@ def calculate_age(birth_date) -> str:
         return "—"
 
 
-def convert_patient_data_to_csv_row(formatted_data: Dict[str, Any]) -> Dict[str, str]:
-    # Cтрока данных для CSV/Excel
-    fullname = formatted_data.get("ФИО", "—")
-    lname = formatted_data.get("Фамилия", "—")
-    fname = formatted_data.get("Имя", "—")
-    mname = formatted_data.get("Отчество", "—")
-    age = calculate_age(formatted_data.get("Дата рождения"))
-    consultant = formatted_data.get("ФИО консультанта", "—")
-    patient_type_1 = formatted_data.get("Статус пациента", "—")
-    patient_type_2 = formatted_data.get("Тип пациента", "—")
-    opgt = formatted_data.get("ОПТГ", "—")
-    first_doctor = formatted_data.get("Доктор первичного приёма", "—")
-    first_visit_date = formatted_data.get("Дата первичного приёма")
-    visits_count = formatted_data.get("Количество визитов в клинику", "—")
+def normalize_date(value) -> date | None:
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d.%m.%Y"):
+            try:
+                return datetime.strptime(value.strip(), fmt).date()
+            except Exception:
+                pass
+    return None
+
+#Возвращает строку даты в формате dd.MM.yyyy
+def format_date_str(value) -> str:
+    d = normalize_date(value)
+    return d.strftime("%d.%m.%Y") if d else "—"
+
+#Унифицированное форматирование Excel-листа
+def format_excel_sheet(ws, light: bool = False):
+    #Шапка
+    for cell in ws[1]:
+        if not light and cell.value == "Название лида":
+            cell.value = "ФИО"
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    #Ширина колонок
+    col_widths = {
+        1: 30,
+        3: 70,
+        5: 170,
+        8: 140,
+        9: 76,
+        11: 140,
+        12: 140,
+        13: 140,
+        14: 90,
+    }
+    for col in range(1, ws.max_column + 1):
+        col_letter = get_column_letter(col)
+        if col in col_widths:
+            ws.column_dimensions[col_letter].width = col_widths[col] / 6  # пересчёт из пикселей
+        else:
+            max_len = max(len(str(c.value)) if c.value else 0 for c in ws[get_column_letter(col)])
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 80)
+
+    # Фиксированная высота строк
+    for row_idx in range(1, ws.max_row + 1):
+        ws.row_dimensions[row_idx].height = 30
+
+    # Выравнивание содержимого
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Формат даты dd.MM.yyyy
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=1, column=col).value
+        if header == "Дата первого визита":
+            for r in range(2, ws.max_row + 1):
+                c = ws.cell(row=r, column=col)
+                if isinstance(c.value, (datetime, date)):
+                    c.number_format = "DD.MM.YYYY"
+
+    # Фильтр и закрепление 
+    ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+    ws.freeze_panes = "A2"
+
+#Формирует строку данных для CSV/Excel
+def convert_patient_data_to_csv_row(data: Dict[str, Any]) -> Dict[str, Any]:
+    # Возраст
+    age_str = calculate_age(data.get("Дата рождения"))
+    age = int(age_str) if str(age_str).isdigit() else None
+
+    # Дата первого визита
+    first_visit_date = normalize_date(data.get("Дата первичного приёма"))
 
     # Предстоящие приёмы
-    future_appointments = formatted_data.get("Предстоящие приёмы", [])
+    future_appointments = data.get("Предстоящие приёмы", [])
+    canceled_exists = bool(future_appointments) and all(
+        a.get("Статус") == "ОТМЕНЕН" for a in future_appointments
+    )
+
     next_appointment = "—"
-    canceled_exists = False
-    if future_appointments:
-        for appt in future_appointments:
-            status = appt.get("Статус")
-            if status == "ОТМЕНЕНО":
-                canceled_exists = True
-            elif status == "ОЖИДАЕТСЯ":
-                date_ = appt.get("Дата", appt.get("WORK_DATE_STR", ""))
-                filial = appt.get("Филиал", appt.get("FILIAL_NAME", ""))
-                doctor = appt.get("Доктор", appt.get("DOCTOR_NAME", ""))
-                comment = appt.get("Комментарий", appt.get("SCHEDAPPEALS_COMMENT", ""))
-                next_appointment = f"{date_}, {filial}, {doctor}, Комментарий: {comment}"
-                canceled_exists = False
-                break
+    for appt in future_appointments:
+        if appt.get("Статус") == "ОЖИДАЕТСЯ":
+            date_str = format_date_str(appt.get("Дата", appt.get("WORK_DATE_STR")))
+            filial = appt.get("Филиал") or appt.get("FILIAL_NAME", "")
+            doctor = appt.get("Доктор") or appt.get("DOCTOR_NAME", "")
+            comment = appt.get("Комментарий") or appt.get("SCHEDAPPEALS_COMMENT", "")
+            next_appointment = f"{date_str}, {filial}, {doctor}, Комментарий: {comment}"
+            break
 
-    # Стоимости
-    complex_plans = formatted_data.get("Комплексные планы", [])
-    prelim_cost = sum(plan.get("Итого", 0) for plan in complex_plans)
+    # Стоимости и процент выполнения
+    prelim_cost = sum(plan.get("Итого", 0) for plan in data.get("Комплексные планы", []))
+    approved_cost = sum(plan.get("Итого", 0) for plan in data.get("Согласованные планы", []))
+    paid_amount = data.get("Общая оплаченная сумма по согласованным планам", 0)
+    plan_percent_value = (Decimal(paid_amount) / Decimal(prelim_cost) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP) if prelim_cost else Decimal(0)
 
-    approved_plans = formatted_data.get("Согласованные планы", [])
-    approved_cost = sum(plan.get("Итого", 0) for plan in approved_plans)
-    paid_amount = formatted_data.get("Общая оплаченная сумма по согласованным планам", 0)
-    plan_percent = Decimal(0)
-    if approved_cost:
-        plan_percent = (Decimal(paid_amount) / Decimal(approved_cost) * 100).quantize(Decimal("1"),
-                                                                                      rounding=ROUND_HALF_UP)
     # Стадия
-    current_stage = formatted_data.get("Текущая стадия лечения", "—")
+    current_stage = data.get("Текущая стадия лечения", "—")
     if canceled_exists or not future_appointments:
         stage = "Нет записей"
     else:
         stage = current_stage
 
     # Ответственный
+    consultant = data.get("ФИО консультанта", "—")
+    first_doctor = data.get("Доктор первичного приёма", "—")
     response_person = "—"
     if consultant != "—":
-        response_person = " ".join(consultant.split()[1:])
+        parts = consultant.split()
+        response_person = " ".join(parts[1:]) if len(parts) > 2 else consultant
     elif first_doctor != "—":
-        response_person = first_doctor
+        parts = first_doctor.split()
+        response_person = " ".join(parts[:2]) if len(parts) > 2 else first_doctor
 
+    # Финальное формирование строки
     return {
-        "Название лида": fullname or "—",
-        "Фамилия": lname,
-        "Имя": fname,
-        "Отчество": mname,
-        "Возраст пациента": age,
+        "Название лида": data.get("ФИО", "—"),
+        "Фамилия": data.get("Фамилия", "—"),
+        "Имя": data.get("Имя", "—"),
+        "Отчество": data.get("Отчество", "—"),
+        "Возраст пациента": age or "",
         "ФИО консультанта пациента": consultant,
-        "Тип пациента 1": patient_type_1,
-        "Тип пациента 2": patient_type_2,
-        "Наличие/отсутствие снимка ОПТГ у пациента": opgt,
+        "Тип пациента 1": data.get("Статус пациента", "—"),
+        "Тип пациента 2": data.get("Тип пациента", "—"),
         "ФИО доктора, проводившего первичный прием": first_doctor,
         "Дата первого визита": first_visit_date,
-        "Количество визитов в клинику": visits_count,
+        "Количество визитов в клинику": data.get("Количество визитов в клинику", 0),
         "Дата следующего приема и ФИО доктора, к кому пациент записан на прием": next_appointment,
-        "Стоимость всех предварительных планов": f"{prelim_cost:.2f} руб.",
-        "Стоимость всех согласованных планов": f"{approved_cost:.2f} руб.",
-        "Сумма оплаченных денег пациентом в клинику": f"{paid_amount:.2f} руб.",
-        "Процент выполнения плана": f"{plan_percent}%",
-        "Комплексный план": "—",
+        "Стоимость всех предварительных планов, руб.": round(prelim_cost, 2),
+        "Стоимость всех согласованных планов, руб.": round(approved_cost, 2),
+        "Сумма оплаченных денег пациентом в клинику, руб.": round(paid_amount, 2),
+        "Процент выполнения плана, %": "{:g}".format(plan_percent_value),
         "Стадия": stage,
         "Текущая стадия лечения": current_stage,
         "Ответственный": response_person,
+        "Филиал": data.get("Филиал", "—"),
+        "По рекомендации": "Да" if data.get("По рекомендации") else "Нет",
     }
 
 
-def _apply_excel_formatting(ws):
-    # Excel с форматированием
-    # 1) Шапка
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    # 2) Ширины колонок по содержимому
-    for col in ws.columns:
-        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = max_length + 2
-
-    # 3) Общие выравнивания
-    for row in ws.iter_rows():
-        for cell in row:
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-
-    # 4) Фильтры на все столбцы + заморозка шапки (удобно)
-    if ws.max_row and ws.max_column:
-        first_cell = "A1"
-        last_cell = f"{get_column_letter(ws.max_column)}{ws.max_row}"
-        ws.auto_filter.ref = f"{first_cell}:{last_cell}"
-        ws.freeze_panes = "A2"  # опционально: закрепить строку заголовков
-
-
-def _write_excel_file(output_file: Path, rows: List[Dict[str, str]]):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Отчёт"
-    ws.append(CSV_HEADERS)
-    for row in rows:
-        ws.append([row.get(h, "") for h in CSV_HEADERS])
-    _apply_excel_formatting(ws)
-    wb.save(output_file)
-
-
-def _append_to_management_report(management_path: Path, rows: List[Dict[str, str]]):
-    # Данные без дубликатов
-    if management_path.exists():
-        wb = load_workbook(management_path)
-        ws = wb.active
-        existing_names = {str(cell.value).strip() for cell in ws["A"][1:] if cell.value}
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Management"
-        ws.append(CSV_HEADERS)
-        existing_names = set()
-
-    added = 0
-    for row in rows:
-        name = str(row.get("Название лида", "")).strip()
-        if name and name not in existing_names:
-            ws.append([row.get(h, "") for h in CSV_HEADERS])
-            existing_names.add(name)
-            added += 1
-
-    _apply_excel_formatting(ws)
-    wb.save(management_path)
-    log.info(f"Добавлено {added} новых записей в {management_path}")
-
-
-# ОСНОВНАЯ ФУНКЦИЯ
-
+# Создаёт processed_patients.csv, processed_patients.xlsx и обновляет Управленческий отчёт
 def export_patients_to_csv(conn, patient_pcodes: List[str], output_file: Path) -> bool:
-    """Создаёт processed_patients.csv, processed_patients.xlsx и обновляет management_report.xlsx"""
-    csv_rows: List[Dict[str, str]] = []
-
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        management_path = output_file.parent / "management_report.xlsx"
-        excel_output = output_file.with_suffix(".xlsx")
-        csv_output = output_file.with_suffix(".csv")
+        csv_path = output_file.with_suffix(".csv")
+        excel_path = output_file.with_suffix(".xlsx")
+        management_path = output_file.parent / "Управленческий отчёт.xlsx"
 
-        # Сбор данных по пациентам
+        # Удаляем старые файлы CSV/Excel
+        for old_file in (csv_path, excel_path):
+            if old_file.exists():
+                try:
+                    old_file.unlink()
+                    log.info(f"Старый файл удалён: {old_file}")
+                except Exception as e:
+                    log.warning(f"Не удалось удалить старый файл {old_file}: {e}")
+
+        csv_rows = []
         for pcode in patient_pcodes:
             try:
                 log.info(f"Обрабатываем пациента {pcode}")
-                raw_data = collect_patient_data(conn, pcode)
-                formatted = format_patient_data(raw_data)
-                csv_row = convert_patient_data_to_csv_row(formatted)
-                csv_rows.append(csv_row)
+                data = format_patient_data(collect_patient_data(conn, pcode))
+                csv_rows.append(convert_patient_data_to_csv_row(data))
             except Exception as e:
                 log.error(f"Ошибка при обработке {pcode}: {e}")
-                continue
 
         if not csv_rows:
             log.warning("Нет данных для экспорта пациентов.")
             return False
 
-        # CSV без форматирования
-        with open(csv_output, "w", newline="", encoding=CSV_ENCODING) as f:
+        # CSV (каждый раз заново)
+        def _csv_safe(row: Dict[str, Any]) -> Dict[str, Any]:
+            r = dict(row)
+            v = r.get("Дата первого визита")
+            if isinstance(v, (date, datetime)):
+                r["Дата первого визита"] = v.strftime("%d.%m.%Y")
+            return r
+
+        with open(csv_path, "w", newline="", encoding=CSV_ENCODING) as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, delimiter=CSV_DELIMITER)
             writer.writeheader()
             for row in csv_rows:
-                writer.writerow(row)
-        log.info(f"Создан CSV-файл: {csv_output}")
+                writer.writerow(_csv_safe(row))
+        log.info(f"Создан новый CSV-файл: {csv_path}")
 
-        # Excel с форматированием
-        _write_excel_file(excel_output, csv_rows)
-        log.info(f"Создан Excel-файл: {excel_output}")
+        # Excel (каждый раз заново)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Отчёт"
+        ws.append(CSV_HEADERS)
+        for row in csv_rows:
+            ws.append([row.get(h, "") for h in CSV_HEADERS])
+        format_excel_sheet(ws)
+        wb.save(excel_path)
+        log.info(f"Создан новый Excel-файл: {excel_path}")
 
-        # Обновление накопительного отчёта
-        _append_to_management_report(management_path, csv_rows)
-
+        # Управленческий отчёт — накопительный
+        append_to_management_report(management_path, csv_rows)
         return True
 
     except Exception as e:
         log.error(f"Ошибка при экспорте пациентов: {e}")
         return False
 
+#Создает CSV с персональными данными пациентов.
 def export_personal_data_to_csv(conn, patient_pcodes: List[str], output_file: Path) -> bool:
-    # Cоздает CSV с персональными данными пациентов
     headers = ["Фамилия", "Имя", "Отчество", "Дата рождения", "Телефон", "Email", "Адрес"]
 
     try:
         output_file = output_file.with_suffix(".csv")
         output_file.parent.mkdir(parents=True, exist_ok=True)
-
         csv_rows = []
+
         for pcode in patient_pcodes:
             try:
-                raw_data = collect_patient_data(conn, pcode)
-                formatted = format_patient_data(raw_data)
-                row = {
-                    "Фамилия": formatted.get("Фамилия", "—"),
-                    "Имя": formatted.get("Имя", "—"),
-                    "Отчество": formatted.get("Отчество", "—"),
-                    "Дата рождения": formatted.get("Дата рождения", "—"),
-                    "Телефон": formatted.get("Телефон", "—"),
-                    "Email": formatted.get("Email", "—"),
-                    "Адрес": formatted.get("Адрес", "—"),
-                }
-                csv_rows.append(row)
+                raw = collect_patient_data(conn, pcode)
+                data = format_patient_data(raw)
+                csv_rows.append({
+                    "Фамилия": data.get("Фамилия", "—"),
+                    "Имя": data.get("Имя", "—"),
+                    "Отчество": data.get("Отчество", "—"),
+                    "Дата рождения": format_date_str(data.get("Дата рождения")),
+                    "Телефон": data.get("Телефон", "—"),
+                    "Email": data.get("Email", "—"),
+                    "Адрес": data.get("Адрес", "—"),
+                })
             except Exception as e:
                 log.error(f"Ошибка при обработке {pcode}: {e}")
                 continue
@@ -284,8 +303,7 @@ def export_personal_data_to_csv(conn, patient_pcodes: List[str], output_file: Pa
         with open(output_file, "w", newline="", encoding=CSV_ENCODING) as f:
             writer = csv.DictWriter(f, fieldnames=headers, delimiter=CSV_DELIMITER)
             writer.writeheader()
-            for row in csv_rows:
-                writer.writerow(row)
+            writer.writerows(csv_rows)
 
         log.info(f"Создан CSV с персональными данными: {output_file}")
         return True
@@ -293,3 +311,174 @@ def export_personal_data_to_csv(conn, patient_pcodes: List[str], output_file: Pa
     except Exception as e:
         log.error(f"Ошибка при экспорте персональных данных: {e}")
         return False
+
+#Добавление данных в 'Управленческий отчёт.xlsx' без дублирования, с форматами и итогами
+def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
+
+    try:
+        # Загрузка / создание отчёта
+        if path.exists():
+            wb = load_workbook(path)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Управленческий отчёт"
+            ws.append(["№ п/п"] + REPORT_HEADERS)
+
+        # Очистка старых итогов (если уже были)
+        for row_idx in range(ws.max_row, 1, -1):
+            val = str(ws.cell(row=row_idx, column=2).value or "").strip().lower()
+            if val.startswith("итоговые показатели"):
+                # удаляем всё начиная с этой строки
+                for _ in range(ws.max_row - row_idx + 1):
+                    ws.delete_rows(row_idx)
+                break
+
+        # Удаляем дубликаты
+        existing = {str(c.value).strip() for c in ws["B"][1:] if c.value}
+        added = 0
+        start_idx = ws.max_row
+
+        for r in rows:
+            fio = r.get("Название лида", "").strip()
+            if not fio or fio in existing:
+                continue
+
+            first_visit = r.get("Дата первого визита")
+            if isinstance(first_visit, (datetime, date)):
+                first_visit_fmt = first_visit
+            else:
+                first_visit_fmt = normalize_date(first_visit)
+
+            # текущая строка (где будет запись)
+            row_idx = ws.max_row + 1
+
+            # динамическая нумерация (начиная с 1, пересчитывается при фильтрах)
+            num_formula = f"=SUBTOTAL(3,$B$2:B{row_idx})"
+
+            ws.append([
+                num_formula,
+                fio,
+                r.get("Возраст пациента", ""),
+                r.get("ФИО консультанта пациента", ""),
+                r.get("Тип пациента 1", ""),
+                r.get("Тип пациента 2", ""),
+                r.get("ФИО доктора, проводившего первичный прием", ""),
+                first_visit_fmt,
+                r.get("Количество визитов в клинику", ""),
+                r.get("Дата следующего приема и ФИО доктора, к кому пациент записан на прием", ""),
+                r.get("Стоимость всех предварительных планов, руб.", ""),
+                r.get("Стоимость всех согласованных планов, руб.", ""),
+                r.get("Сумма оплаченных денег пациентом в клинику, руб.", ""),
+                r.get("Процент выполнения плана, %", ""),
+                r.get("Текущая стадия лечения", ""),
+                r.get("Ответственный", ""),
+                r.get("Филиал", ""),
+                r.get("По рекомендации", ""),
+            ])
+            existing.add(fio)
+            added += 1
+
+        # Шапка
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        # Выравнивание строк
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        # Ширины столбцов
+        col_widths = {
+            1: 30,
+            3: 70,
+            5: 170,
+            8: 140,
+            9: 76,
+            11: 140,
+            12: 140,
+            13: 140,
+            14: 90,
+        }
+
+        for col in range(1, ws.max_column + 1):
+            col_letter = get_column_letter(col)
+            if col in col_widths:
+                ws.column_dimensions[col_letter].width = col_widths[col] / 6  # пересчёт из пикселей в Excel-ширину
+            else:
+                # автоширина
+                max_len = max(
+                    len(str(c.value)) if c.value else 0
+                    for c in ws[get_column_letter(col)]
+                )
+                ws.column_dimensions[col_letter].width = min(max_len + 2, 80)
+
+        # Формат даты для "Дата первого визита"
+        for col in range(1, ws.max_column + 1):
+            header = ws.cell(row=1, column=col).value
+            if header == "Дата первого визита":
+                for r in range(2, ws.max_row + 1):
+                    c = ws.cell(row=r, column=col)
+                    if isinstance(c.value, (datetime, date)):
+                        c.number_format = "DD.MM.YYYY"
+
+
+        # Итоговый блок
+        headers = [c.value for c in ws[1]]
+        first_row = 2
+        last_row = ws.max_row
+        col_title = headers.index("ФИО") + 1
+        col_next = headers.index("Дата следующего приема и ФИО доктора, к кому пациент записан на прием") + 1
+        col_paid = headers.index("Сумма оплаченных денег пациентом в клинику, руб.") + 1
+
+
+        rng_title = f"{get_column_letter(col_title)}{first_row}:{get_column_letter(col_title)}{last_row}"
+        rng_next = f"{get_column_letter(col_next)}{first_row}:{get_column_letter(col_next)}{last_row}"
+        first_cell = rng_next.split(":")[0]
+        rng_paid = f"{get_column_letter(col_paid)}{first_row}:{get_column_letter(col_paid)}{last_row}"
+
+        start = ws.max_row + 3
+        ws.cell(start, 2).value = "Итоговые показатели по текущему фильтру"
+        ws.cell(start, 2).font = Font(bold=True)
+
+        def write_metric(row, name, formula):
+            ws.cell(row, 2).value = name
+            ws.cell(row, 3).value = f"={formula}"
+            ws.cell(row, 2).font = Font(bold=True)
+
+        write_metric(start + 1, "Количество пациентов", f"SUBTOTAL(103,{rng_title})")
+        write_metric(
+            start + 2,
+            "Записались повторно",
+            f'SUMPRODUCT((SUBTOTAL(103,OFFSET({first_cell},ROW({rng_next})-MIN(ROW({rng_next})),0)))*(({rng_next}<>"" )*({rng_next}<>"—")))'
+        )
+        write_metric(
+            start + 3,
+            "Конверсия, %",
+            f"IFERROR(({get_column_letter(3)}{start + 2}/{get_column_letter(3)}{start + 1})*100,0)"
+        )
+        write_metric(start + 4, "Общая сумма оплат, руб.", f"SUBTOTAL(9,{rng_paid})")
+        write_metric(
+            start + 5,
+            "Средняя стоимость лечения, руб.",
+            f"IFERROR(SUBTOTAL(9,{rng_paid})/SUBTOTAL(103,{rng_title}),0)"
+        )
+
+        # Обновляем фильтр только для таблицы пациентов
+        last_col = get_column_letter(ws.max_column)
+        data_last_row = last_row + 1
+
+        # ограничиваем фильтр только данными пациентов
+        ws.auto_filter.ref = f"A1:{last_col}{data_last_row}"
+        ws.freeze_panes = "A2"
+
+        wb.save(path)
+        log.info(f"Добавлено {added} строк в {path}")
+
+
+
+    except Exception as e:
+        log.error(f"Ошибка при обновлении Управленческого отчёта: {e}")
+

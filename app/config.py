@@ -51,5 +51,23 @@ class Settings(BaseSettings):
     BITRIX_PASSWORD: Optional[SecretStr] = Field(default=None)
 
     @property
+    def resolved_db_password(self) -> str:
+        secret_path = Path("/run/secrets/db_password")
+        if secret_path.exists():
+            return secret_path.read_text().strip()
+        if self.DB_PASSWORD:
+            return self.DB_PASSWORD.get_secret_value()
+        return os.getenv("DB_PASSWORD", "")
+
+    @property
+    def resolved_bitrix_password(self) -> str:
+        secret_path = Path("/run/secrets/bitrix_password")
+        if secret_path.exists():
+            return secret_path.read_text().strip()
+        if self.BITRIX_PASSWORD:
+            return self.BITRIX_PASSWORD.get_secret_value()
+        return os.getenv("BITRIX_PASSWORD", "")
+
+    @property
     def firebird_dsn(self) -> str:
         return f"{self.DB_HOST}/{self.DB_PORT}:{self.DB_PATH}"

@@ -11,12 +11,12 @@ log = get_logger(__name__)
 
 contact_file_path = os.path.abspath("output/csv/processed_patients_personal_data.csv")
 lead_file_path = os.path.abspath("output/csv/processed_patients.csv")
-report_file_path = os.path.abspath("output/csv/management_report.xlsx")
+report_file_path = os.path.abspath("output/csv/Управленческий отчёт.xlsx")
 
 def load_csv_to_bitrix(settings):
 
     login = settings.BITRIX_LOGIN
-    password = settings.BITRIX_PASSWORD.get_secret_value() if settings.BITRIX_PASSWORD else None
+    password = settings.resolved_bitrix_password
     browser = settings.BROWSER
     main_url = settings.BITRIX_MAIN_URL
     contact_url = settings.BITRIX_IMPORT_CONTACT_URL
@@ -97,10 +97,6 @@ def load_csv_to_bitrix(settings):
     driver.find_element(By.ID, 'FolderListButtonClose').click()
     log.info(f"Загрузка управленческого отчёта прошла успешно")
 
-
-
-
-
-    time.sleep(100)
+    time.sleep(5)
     driver.quit()
 

@@ -2,7 +2,7 @@ import csv
 import time
 import requests
 from pathlib import Path
-from app.logging import get_logger
+from app.custom_logging import get_logger
 from app.config import Settings, load_non_secret_env
 
 log = get_logger(__name__)

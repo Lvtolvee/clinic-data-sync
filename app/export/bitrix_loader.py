@@ -3,11 +3,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait,Select
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.support import expected_conditions as EC
 import time
 import os
 
 
-from app.logging import get_logger
+from app.custom_logging import get_logger
 
 log = get_logger(__name__)
 
@@ -67,7 +68,14 @@ def load_csv_to_bitrix(settings):
     time.sleep(10)
     driver.find_element(By.ID, 'dup_ctrl_replace').click()
     driver.find_element(By.NAME, 'next').click()
-    time.sleep(10)
+    log.info("Ожидание завершения импорта и появления кнопки 'Новый импорт'")
+    try:
+        WebDriverWait(driver, 180).until(
+            EC.presence_of_element_located((By.ID, "crm_import_again"))
+        )
+        log.info("Импорт завершён — кнопка 'Новый импорт' появилась.")
+    except Exception:
+        log.warning("Кнопка 'Новый импорт' не появилась вовремя — возможно, импорт ещё идёт или произошла ошибка.")
     log.info(f"Загрузка персональной информации пациентов прошла успешно")
 
     #Загрузка медицинской информации
@@ -84,7 +92,14 @@ def load_csv_to_bitrix(settings):
     time.sleep(10)
     driver.find_element(By.ID, 'dup_ctrl_replace').click()
     driver.find_element(By.NAME, 'next').click()
-    time.sleep(10)
+    log.info("Ожидание завершения импорта и появления кнопки 'Новый импорт'")
+    try:
+        WebDriverWait(driver, 180).until(
+            EC.presence_of_element_located((By.ID, "crm_import_again"))
+        )
+        log.info("Импорт завершён — кнопка 'Новый импорт' появилась.")
+    except Exception:
+        log.warning("Кнопка 'Новый импорт' не появилась вовремя — возможно, импорт ещё идёт или произошла ошибка.")
     log.info(f"Загрузка медицинской информации пациентов прошла успешно")
 
     # Загрузка управленческого отчёта

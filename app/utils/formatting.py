@@ -24,8 +24,8 @@ def format_patient_data(data: dict) -> dict:
     fw = info.get("FIRSTWORKDATE")
     result["Дата первичного приёма"] = fw.strftime("%d.%m.%Y") if fw else "—"
     result["Доктор первичного приёма"] = info.get("FIRST_DOCTOR") or "—"
-    result["Статус пациента"] = info.get("AGESTATUS_NAME") or "—"
-    result["Тип пациента"] = info.get("TYPESTATUS_NAME") or "—"
+    result["Статус пациента"] = info.get("AGESTATUS_NAME") or "Статус не установлен"
+    result["Тип пациента"] = info.get("TYPESTATUS_NAME") or "Статус не установлен"
     result["Текущая стадия лечения"] = data.get("current_stage") or "—"
     approved_plans = data.get("approved_plans") or []
     result["Количество визитов в клинику"] = info.get("VISIT_COUNT") or 0

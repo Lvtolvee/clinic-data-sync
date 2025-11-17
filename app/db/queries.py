@@ -227,4 +227,12 @@ FROM SCHEDULE
 WHERE SCHEDID = ?
 """
 
+SQL_REPEAT_PATIENTS = """
+SELECT c.PCODE
+FROM CLIENTS c
+LEFT JOIN CLSTATUS cls ON cls.SID = c.AGESTATUS
+WHERE cls.SNAME = 'Повторный пациент под кураторством'
+"""
+
+
 

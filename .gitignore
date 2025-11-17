@@ -9,9 +9,10 @@ __pycache__/
 .dockerignore
 Dockerfile
 docker-compose.yml
-.env
+app/.env
 clinic_data_sync.tar
 known_patients.json
+app/db/client.py
 
 
 # Исключить виртуальное окружение

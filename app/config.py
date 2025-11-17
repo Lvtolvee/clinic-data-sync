@@ -16,11 +16,14 @@ def load_non_secret_env(dotenv_path: str = ".env") -> None:
         from dotenv import dotenv_values
     except Exception:
         return
-    for k, v in dotenv_values(dotenv_path).items():
+
+    values = dotenv_values(dotenv_path)
+    for k, v in values.items():
         if v is None:
             continue
-        if k in _NON_SECRET_KEYS and k not in os.environ:
+        if k not in os.environ:
             os.environ[k] = v
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")

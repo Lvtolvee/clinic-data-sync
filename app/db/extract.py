@@ -1,9 +1,9 @@
-from app.logging import log_call, get_logger
+from app.custom_logging import log_call, get_logger
 from app.db.queries import (
     SQL_PRIMARY_APPTS_TODAY, SQL_MAIN_QUERY, SQL_GET_LAST_OBSLED, SQL_GET_PARAMSINFO,
     SQL_GET_TREATMENT_PLAN, SQL_GET_COMPLEX_PLANS, SQL_GET_PLAN_DETAILS,
     SQL_GET_APPROVED_PLANS, SQL_GET_APPROVED_PLANS_PAID, SQL_GET_TREATCODES,
-    SQL_GET_STAGE, SQL_GET_FUTURE_APPOINTMENTS, SQL_GET_SCHEDULE_INFO
+    SQL_GET_STAGE, SQL_GET_FUTURE_APPOINTMENTS, SQL_GET_SCHEDULE_INFO, SQL_REPEAT_PATIENTS
 )
 
 log = get_logger(__name__)
@@ -39,7 +39,6 @@ def fetch_main_info(conn, pcode: str):
 def fetch_last_obslnum(conn, pcode: str):
     return _fetch_one(conn, SQL_GET_LAST_OBSLED, (pcode,))
 
-
 @log_call()
 def fetch_paramsinfo(conn, obslnum: int):
     return _fetch_all(conn, SQL_GET_PARAMSINFO, (obslnum,))
@@ -53,8 +52,6 @@ def fetch_composite_plan(conn, pcode: str):
 def fetch_complex_plans(conn, pcode: str):
     return _fetch_all(conn, SQL_GET_COMPLEX_PLANS, (pcode,))
 
-
-# --- Согласованные планы ---
 @log_call()
 def fetch_approved_plans(conn, pcode: str):
     return _fetch_all(conn, SQL_GET_APPROVED_PLANS, (pcode,))
@@ -63,6 +60,10 @@ def fetch_approved_plans(conn, pcode: str):
 def fetch_approved_plans_paid(conn, pcode: str):
     row = _fetch_one(conn, SQL_GET_APPROVED_PLANS_PAID, (pcode,))
     return row["PAID_SUM"] if row and row["PAID_SUM"] is not None else 0
+
+@log_call()
+def fetch_repeat_patients(conn):
+    return _fetch_all(conn, SQL_REPEAT_PATIENTS)
 
 @log_call()
 def fetch_current_stage(conn, pcode: str):

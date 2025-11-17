@@ -4,11 +4,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Dict, Any
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, Alignment
+from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 from decimal import Decimal, ROUND_HALF_UP
 
-from app.logging import get_logger
+from app.custom_logging import get_logger
 from app.db.extract import collect_patient_data
 from app.utils.formatting import format_patient_data
 
@@ -95,7 +95,8 @@ def format_excel_sheet(ws, light: bool = False):
 
     #Ширина колонок
     col_widths = {
-        1: 30,
+        1:40,
+        2: 285,
         3: 70,
         5: 170,
         8: 140,
@@ -197,8 +198,8 @@ def convert_patient_data_to_csv_row(data: Dict[str, Any]) -> Dict[str, Any]:
         "Отчество": data.get("Отчество", "—"),
         "Возраст пациента": age or "",
         "ФИО консультанта пациента": consultant,
-        "Тип пациента 1": data.get("Статус пациента", "—"),
-        "Тип пациента 2": data.get("Тип пациента", "—"),
+        "Тип пациента 1": data.get("Статус пациента", "Статус не установлен"),
+        "Тип пациента 2": data.get("Тип пациента", "Статус не установлен"),
         "ФИО доктора, проводившего первичный прием": first_doctor,
         "Дата первого визита": first_visit_date,
         "Количество визитов в клинику": data.get("Количество визитов в клинику", 0),
@@ -325,19 +326,26 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
         if path.exists():
             wb = load_workbook(path)
             ws = wb.active
+            if ws.merged_cells.ranges:
+                for merged_range in list(ws.merged_cells.ranges):
+                    ws.unmerge_cells(str(merged_range))
         else:
             wb = Workbook()
             ws = wb.active
             ws.title = "Управленческий отчёт"
             ws.append(["№ п/п"] + REPORT_HEADERS)
 
-        # Очистка старых итогов (если уже были)
-        for row_idx in range(ws.max_row, 1, -1):
+        # Очистка старых итогов
+        for row_idx in range(1, ws.max_row + 1):
             val = str(ws.cell(row=row_idx, column=2).value or "").strip().lower()
-            if val.startswith("итоговые показатели"):
-                # удаляем всё начиная с этой строки
-                for _ in range(ws.max_row - row_idx + 1):
-                    ws.delete_rows(row_idx)
+            if val.startswith("комплексный пациент"):
+                ws.delete_rows(row_idx, ws.max_row - row_idx + 1)
+                break
+        while ws.max_row > 1:
+            is_empty = all((c.value is None or str(c.value).strip() == "") for c in ws[ws.max_row])
+            if is_empty:
+                ws.delete_rows(ws.max_row)
+            else:
                 break
 
         # Удаляем дубликаты
@@ -347,8 +355,23 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
 
         for r in rows:
             fio = r.get("Название лида", "").strip()
-            if not fio or fio in existing:
+            if not fio:
                 continue
+
+            # Ищем строку с таким же ФИО
+            existing_row = None
+            for row in range(2, ws.max_row + 1):
+                cell_value = str(ws.cell(row=row, column=2).value or "").strip()
+                if cell_value == fio:
+                    existing_row = row
+                    break
+
+            # Если нашли — перезаписываем всю строку новыми данными
+            if existing_row:
+                row_idx = existing_row
+            else:
+                row_idx = ws.max_row + 1
+                ws.append([])  # создаём новую строку, чтобы ws.cell() мог к ней обращаться
 
             first_visit = r.get("Дата первого визита")
             if isinstance(first_visit, (datetime, date)):
@@ -356,13 +379,10 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
             else:
                 first_visit_fmt = normalize_date(first_visit)
 
-            # текущая строка (где будет запись)
-            row_idx = ws.max_row + 1
-
-            # динамическая нумерация (начиная с 1, пересчитывается при фильтрах)
             num_formula = f"=SUBTOTAL(3,$B$2:B{row_idx})"
 
-            ws.append([
+            # Записываем данные по столбцам
+            data_values = [
                 num_formula,
                 fio,
                 r.get("Возраст пациента", ""),
@@ -381,8 +401,11 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
                 r.get("Ответственный", ""),
                 r.get("Филиал", ""),
                 r.get("По рекомендации", ""),
-            ])
-            existing.add(fio)
+            ]
+
+            for col_idx, value in enumerate(data_values, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
             added += 1
 
         # Шапка
@@ -397,8 +420,9 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
 
         # Ширины столбцов
         col_widths = {
-            1: 30,
-            3: 70,
+            1:40,
+            2:285,
+            3: 110,
             5: 170,
             8: 140,
             9: 76,
@@ -429,22 +453,129 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
                     if isinstance(c.value, (datetime, date)):
                         c.number_format = "DD.MM.YYYY"
 
+        # Формат даты для "Дата первого визита"
+        for col in range(1, ws.max_column + 1):
+            header = ws.cell(row=1, column=col).value
+            if header == "Дата первого визита":
+                for r in range(2, ws.max_row + 1):
+                    c = ws.cell(row=r, column=col)
+                    if isinstance(c.value, (datetime, date)):
+                        c.number_format = "DD.MM.YYYY"
 
-        # Итоговый блок
-        headers = [c.value for c in ws[1]]
+
+        start_row = ws.max_row + 1
+        ws.append([None] * ws.max_column)
+        start_row += 1
+
+        # диапазон данных пациентов
         first_row = 2
-        last_row = ws.max_row
+        last_row = start_row - 2  # последняя строка с пациентами
+
+        col_type1 = 5  # столбец E
+        col_type2 = 6  # столбец F
+        col_type3 = 15 # столбец O
+
+        # Формирование диапазонов
+        rng_type1 = f"{get_column_letter(col_type1)}{first_row}:{get_column_letter(col_type1)}{last_row}"
+        rng_type2 = f"{get_column_letter(col_type2)}{first_row}:{get_column_letter(col_type2)}{last_row}"
+        rng_type3 = f"{get_column_letter(col_type3)}{first_row}:{get_column_letter(col_type3)}{last_row}"
+
+        first_cell_type1 = f"{get_column_letter(col_type1)}{first_row}"
+        first_cell_type2 = f"{get_column_letter(col_type2)}{first_row}"
+        first_cell_type3 = f"{get_column_letter(col_type3)}{first_row}"
+
+        # Вставляем строки блока Тип пациента 2
+        block_data_type1 = [
+            "Комплексный пациент",
+            "Не комплексный пациент",
+            "Нуждается в наркозе",
+            "Статус не установлен",
+        ]
+
+        orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+
+        row_ptr = start_row
+
+        for value in block_data_type1:
+            ws.cell(row_ptr, 2, value)
+            ws.cell(row_ptr, 2).fill = orange
+
+            # Формула подсчёта
+            formula = (
+                f'=SUMPRODUCT(('
+                f'SUBTOTAL(103,OFFSET({first_cell_type1},ROW({rng_type1})-ROW({first_cell_type1}),0))'
+                f')*({rng_type1}="{value}"))'
+            )
+            ws.cell(row_ptr, 3, formula)
+
+            row_ptr += 1
+
+        # Пустая строка между группами
+        row_ptr += 1
+
+        # Вставляем строки блока Тип пациента 1
+        block_data_type2 = [
+            "Санирован",
+            "Отказ от лечения",
+            "Готовность к реализации (Готов к реализации + готов по специализации)",
+            "Думает",
+            "Статус не установлен",
+        ]
+
+        for value in block_data_type2:
+            ws.cell(row_ptr, 2, value)
+            ws.cell(row_ptr, 2).fill = yellow
+
+            if value.startswith("Санирован"):
+                formula = (
+                    f'=SUMPRODUCT(('
+                    f'SUBTOTAL(103,OFFSET({first_cell_type3},ROW({rng_type3})-ROW({first_cell_type3}),0))'
+                    f')*({rng_type3}="{value}"))'
+                )
+            elif value.startswith("Готовность"):
+                # специальная формула ИЛИ
+                conditions = [
+                    "Готов к реализации плана лечения",
+                    "Готов по специализации",
+                ]
+                conditions_or = "+".join([f'({rng_type2}="{c}")' for c in conditions])
+
+                formula = (
+                    f'=SUMPRODUCT(('
+                    f'SUBTOTAL(103,OFFSET({first_cell_type2},ROW({rng_type2})-ROW({first_cell_type2}),0))>0)'
+                    f'*(({conditions_or})))'
+                )
+            else:
+                # обычная формула
+                formula = (
+                    f'=SUMPRODUCT(('
+                    f'SUBTOTAL(103,OFFSET({first_cell_type2},ROW({rng_type2})-ROW({first_cell_type2}),0))'
+                    f')*({rng_type2}="{value}"))'
+                )
+
+            ws.cell(row_ptr, 3, formula)
+            row_ptr += 1
+
+        # ПУСТАЯ строка перед итогами
+        ws.append([])
+        row_ptr += 1
+
+        #ИТОГОВЫЙ БЛОК
+
+        headers = [c.value for c in ws[1]]
+
         col_title = headers.index("ФИО") + 1
         col_next = headers.index("Дата следующего приема и ФИО доктора, к кому пациент записан на прием") + 1
         col_paid = headers.index("Сумма оплаченных денег пациентом в клинику, руб.") + 1
-
 
         rng_title = f"{get_column_letter(col_title)}{first_row}:{get_column_letter(col_title)}{last_row}"
         rng_next = f"{get_column_letter(col_next)}{first_row}:{get_column_letter(col_next)}{last_row}"
         first_cell = rng_next.split(":")[0]
         rng_paid = f"{get_column_letter(col_paid)}{first_row}:{get_column_letter(col_paid)}{last_row}"
 
-        start = ws.max_row + 3
+        start = row_ptr
+
         ws.cell(start, 2).value = "Итоговые показатели по текущему фильтру"
         ws.cell(start, 2).font = Font(bold=True)
 
@@ -471,13 +602,11 @@ def append_to_management_report(path: Path, rows: List[Dict[str, str]]):
             f"IFERROR(SUBTOTAL(9,{rng_paid})/SUBTOTAL(103,{rng_title}),0)"
         )
 
-        # Обновляем фильтр только для таблицы пациентов
+        # Ограничиваем автофильтр только областью пациентов
         last_col = get_column_letter(ws.max_column)
-        data_last_row = last_row + 1
-
-        # ограничиваем фильтр только данными пациентов
-        ws.auto_filter.ref = f"A1:{last_col}{data_last_row}"
+        ws.auto_filter.ref = f"A1:{last_col}{last_row}"
         ws.freeze_panes = "A2"
+
 
         wb.save(path)
         log.info(f"Добавлено {added} строк в {path}")

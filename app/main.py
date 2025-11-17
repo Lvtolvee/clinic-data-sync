@@ -8,18 +8,22 @@ from pathlib import Path
 from typing import List
 
 from app.config import load_non_secret_env, Settings
-from app.logging import setup_logging, get_logger, patient_log, stage_log
+from app.custom_logging import setup_logging, get_logger, patient_log, stage_log
 from app.db.client import get_connection
 from app.db.extract import (
     fetch_primary_patients_today,
     fetch_future_appointments,
     fetch_main_info,
     collect_patient_data,
+    fetch_repeat_patients
 )
+from app.utils.formatting import format_patient_data
 from app.reports.patient_report import build_patient_report
 from app.export.csv_exporter import export_patients_to_csv, export_personal_data_to_csv
 
-load_non_secret_env()
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / ".env"
+load_non_secret_env(str(ENV_PATH))
 settings = Settings()
 setup_logging(
     level=getattr(settings, "LOG_LEVEL", "INFO"),
@@ -44,35 +48,39 @@ def _serialize_value(value):
 
 
 def calculate_patient_hash(patient_data: dict) -> str:
-    info = patient_data.get("info", {})
+    #Хешируем только те поля, которые уходят в Bitrix (CSV_HEADERS)
 
+    # Берём финальную модель данных (как для CSV)
+    formatted = format_patient_data(dict(patient_data))
+
+    # Поля, которые реально отправляются в Bitrix
     key_fields = {
-        "LASTNAME": _serialize_value(info.get("LASTNAME")),
-        "FIRSTNAME": _serialize_value(info.get("FIRSTNAME")),
-        "MIDNAME": _serialize_value(info.get("MIDNAME")),
-        "BDATE": _serialize_value(info.get("BDATE")),
-        "FULL_ADDR": _serialize_value(info.get("FULL_ADDR")),
-        "PHONE1": _serialize_value(info.get("PHONE1")),
-        "PHONE2": _serialize_value(info.get("PHONE2")),
-        "PHONE3": _serialize_value(info.get("PHONE3")),
-        "CLMAIL": _serialize_value(info.get("CLMAIL")),
-        "AGESTATUS_NAME": _serialize_value(info.get("AGESTATUS_NAME")),
-        "TYPESTATUS_NAME": _serialize_value(info.get("TYPESTATUS_NAME")),
-        "CONSULT_DOCTOR": _serialize_value(info.get("CONSULT_DOCTOR")),
-        "FIRST_DOCTOR": _serialize_value(info.get("FIRST_DOCTOR")),
-        "FIRSTWORKDATE": _serialize_value(info.get("FIRSTWORKDATE")),
-        "current_stage": _serialize_value(patient_data.get("current_stage")),
-        "composite_plan_count": len(patient_data.get("composite_plan", [])),
-        "complex_plans_count": len(patient_data.get("complex_plans", [])),
-        "approved_plans_count": len(patient_data.get("approved_plans", [])),
-        "total_sum": _serialize_value(info.get("total_sum")),
-        "paid_sum": _serialize_value(info.get("paid_sum")),
-        "filial": _serialize_value(info.get("FILIAL_NAME")),
-        "reklama": _serialize_value(info.get("REKLAMA")),
+        "ФИО": formatted.get("ФИО"),
+        "Фамилия": formatted.get("Фамилия"),
+        "Имя": formatted.get("Имя"),
+        "Отчество": formatted.get("Отчество"),
+        "Возраст пациента": formatted.get("Возраст пациента"),
+        "ФИО консультанта": formatted.get("ФИО консультанта"),
+        "Тип пациента 1": formatted.get("Статус пациента"),
+        "Тип пациента 2": formatted.get("Тип пациента"),
+        "Доктор первичного приёма": formatted.get("Доктор первичного приёма"),
+        "Дата первичного приёма": formatted.get("Дата первичного приёма"),
+        "Количество визитов": formatted.get("Количество визитов в клинику"),
+        "Следующий визит": formatted.get("Предстоящие приёмы"),
+        "Стоимость предварительных планов": sum(p["Итого"] for p in formatted.get("Комплексные планы", [])),
+        "Стоимость согласованных планов": sum(p["Итого"] for p in formatted.get("Согласованные планы", [])),
+        "Сумма оплат": formatted.get("Общая оплаченная сумма по согласованным планам"),
+        "Процент выполнения": formatted.get("Процент выполнения плана, %"),
+        "Стадия": formatted.get("Стадия"),
+        "Текущая стадия лечения": formatted.get("Текущая стадия лечения"),
+        "Ответственный": formatted.get("Ответственный"),
+        "Филиал": formatted.get("Филиал"),
+        "По рекомендации": formatted.get("По рекомендации"),
     }
 
     data_str = json.dumps(key_fields, sort_keys=True, ensure_ascii=False)
     return hashlib.md5(data_str.encode("utf-8")).hexdigest()
+
 
 
 def load_known_patients() -> dict:
@@ -95,7 +103,17 @@ def process_patient(conn, pcode: str, known: dict, target_date: date, is_new: bo
         current_data = collect_patient_data(conn, pcode)
         current_hash = calculate_patient_hash(current_data)
         appts = fetch_future_appointments(conn, pcode)
-        latest_appt = max([str(a.get("WORK_DATE_STR", "")) for a in appts], default=None)
+        
+        def _parse(s):
+            try:
+                return datetime.strptime(s, "%Y-%m-%d").date()
+            except:
+                return None
+
+        dates = [_parse(a.get("WORK_DATE_STR")) for a in appts]
+        latest_appt = max([d for d in dates if d], default=None)
+        if latest_appt:
+            latest_appt = latest_appt.strftime("%Y-%m-%d")
 
         patient_info = known.get(pcode, {})
         last_saved_appt = patient_info.get("last_appointment_date")
@@ -170,6 +188,12 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
 
     with get_connection(settings) as conn:
         log.info("Обновляем известных пациентов перед обработкой дат...")
+        # Получаем всех пациентов типа "Повторный пациент под кураторством"
+        repeat_rows = fetch_repeat_patients(conn)
+        repeat_pcodes = {str(r["PCODE"]) for r in repeat_rows}
+        log.info(f"Повторных пациентов под кураторством: {len(repeat_pcodes)}")
+
+        # Проверяем ВСЕХ пациентов из known_patients.json
         for pcode, pdata in list(known.items()):
             try:
                 current_data = collect_patient_data(conn, pcode)
@@ -177,10 +201,23 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
                 last_saved_hash = pdata.get("data_hash")
 
                 if last_saved_hash != current_hash:
+                    # Хеш изменился → пересоздаем отчёт
                     log.info(f"Изменения у {pcode}: хэш изменился — пересоздаём отчёт")
-                    process_and_register_patient(conn, pcode, known, date_range[0], all_processed_pcodes, is_new=False)
+
+                    process_patient(conn, pcode, known, date_range[0], is_new=False)
+
+                    # обновляем только нужные поля
+                    known[pcode]["data_hash"] = current_hash
+                    known[pcode]["last_checked"] = str(date_range[0])
+                    known[pcode]["last_updated"] = str(date.today())
+
+                    # включаем в CSV
+                    if pcode not in all_processed_pcodes:
+                        all_processed_pcodes.append(pcode)
+
                 else:
-                    log.debug(f"Без изменений: {pcode}")
+                    # Хеш НЕ изменился — только обновляем дату проверки
+                    known[pcode]["last_checked"] = str(date_range[0])
 
             except Exception as e:
                 log.error(f"Ошибка при проверке {pcode}: {e}")
@@ -189,6 +226,28 @@ def main(date_range: List[date], filter_pcodes: List[str] | None = None) -> None
         for target_date in date_range:
             log.info(f"\n=== Обработка за {target_date} ===")
             processed_today: list[str] = []
+
+            # СНАЧАЛА: повторные пациенты под кураторством
+            for pcode in repeat_pcodes:
+                info = fetch_main_info(conn, pcode)
+                if not info:
+                    log.warning(f"Пациент с PCODE={pcode} не найден")
+                    continue
+
+                if pcode not in known:
+                    known[pcode] = {
+                        "last_checked": str(target_date),
+                        "last_appointment_date": None,
+                        "data_hash": None,
+                    }
+                    log.info(
+                        f"Новый пациент (повторный под кураторством): {pcode} {info.get('LASTNAME', '')} {info.get('FIRSTNAME', '')}")
+
+                process_and_register_patient(
+                    conn, pcode, known, target_date,
+                    all_processed_pcodes, is_new=False  # Аналогично обновлению старых
+                )
+                processed_today.append(pcode)
 
             if filter_pcodes:
                 for pcode in filter_pcodes:
